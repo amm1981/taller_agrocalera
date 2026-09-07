@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom'
 import {
   Bell,
@@ -70,13 +70,30 @@ export function AppLayout({
   const location = useLocation()
   const navigate = useNavigate()
   const [sidebarExpanded, setSidebarExpanded] = useState(true)
-  const [maestrosOpen, setMaestrosOpen] = useState(true)
-  const [horometrosOpen, setHorometrosOpen] = useState(true)
+  const [openMenu, setOpenMenu] = useState<string | null>(null)
   const initials = (session?.user.name ?? 'Juan Andrade')
     .split(' ')
     .map((part) => part.charAt(0).toUpperCase())
     .slice(0, 2)
     .join('')
+
+  useEffect(() => {
+    if (!openMenu) {
+      return
+    }
+
+    if (!sidebarExpanded) {
+      setOpenMenu(null)
+      return
+    }
+
+    const currentParent = navigation.find((item) => item.label === openMenu)
+    const currentPath = currentParent?.to.split('?')[0]
+
+    if (!currentParent?.children || !currentPath || !location.pathname.startsWith(currentPath)) {
+      setOpenMenu(null)
+    }
+  }, [location.pathname, openMenu, sidebarExpanded])
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
@@ -114,7 +131,7 @@ export function AppLayout({
               : isHorometros
                 ? location.pathname.startsWith('/horometros')
               : itemPath === '/' ? location.pathname === '/' : location.pathname.startsWith(itemPath)
-            const isOpen = isHorometros ? horometrosOpen : maestrosOpen
+            const isOpen = openMenu === item.label
 
             return (
               <div key={item.label}>
@@ -127,11 +144,7 @@ export function AppLayout({
                       isActive ? 'bg-white/20 font-black' : 'font-bold hover:bg-white/10',
                     )}
                     onClick={() => {
-                      if (isHorometros) {
-                        setHorometrosOpen((current) => !current)
-                      } else {
-                        setMaestrosOpen((current) => !current)
-                      }
+                      setOpenMenu((current) => (current === item.label ? null : item.label))
 
                       if (!isActive) {
                         navigate(item.to)
@@ -151,6 +164,7 @@ export function AppLayout({
                 ) : (
                   <Link
                     to={item.to}
+                    onClick={() => setOpenMenu(null)}
                     className={cn(
                       'flex h-10 items-center rounded-lg text-sm text-white transition-colors',
                       sidebarExpanded ? 'gap-3 px-3' : 'justify-center px-0',
@@ -179,6 +193,7 @@ export function AppLayout({
                         <Link
                           key={child.label}
                           to={child.to}
+                          onClick={() => setOpenMenu(item.label)}
                           className={cn(
                             'flex h-8 items-center gap-2 rounded-md px-2 text-xs text-white transition-colors',
                             isChildActive ? 'bg-white/20 font-black' : 'font-semibold hover:bg-white/10',

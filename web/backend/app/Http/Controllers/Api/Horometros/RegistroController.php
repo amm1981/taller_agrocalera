@@ -107,6 +107,30 @@ class RegistroController extends Controller
         ];
     }
 
+    public function destroy(Request $request, HorometroRegistro $registro): JsonResponse
+    {
+        abort_unless(
+            $request->user()?->hasRole('ADMINISTRADOR') || $request->user()?->username === 'administrador',
+            403,
+            'Solo el usuario administrador puede eliminar registros.',
+        );
+
+        $paths = array_values(array_unique(array_filter([
+            $registro->foto_inicial,
+            $registro->foto_final,
+        ])));
+
+        $registro->delete();
+
+        foreach ($paths as $path) {
+            if (! str_starts_with($path, 'http://') && ! str_starts_with($path, 'https://')) {
+                Storage::disk(config('filesystems.evidence_disk', 'public'))->delete($path);
+            }
+        }
+
+        return response()->json(status: 204);
+    }
+
     public function inicio(Request $request): JsonResponse
     {
         $fotoRules = $this->photoRules('foto_inicial', 'foto_inicial_base64');

@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, NavLink, useLocation } from 'react-router-dom'
 import {
   Bell,
@@ -75,6 +75,28 @@ export function AppLayout({
     .map((part) => part.charAt(0).toUpperCase())
     .slice(0, 2)
     .join('')
+
+  useEffect(() => {
+    if (!sidebarExpanded) {
+      return
+    }
+
+    const activeParent = navigation.find((item) => {
+      if (!item.children) {
+        return false
+      }
+
+      const itemPath = item.to.split('?')[0]
+
+      return itemPath === '/horometros'
+        ? location.pathname.startsWith('/horometros')
+        : itemPath === '/maestros'
+          ? location.pathname === '/maestros'
+          : location.pathname.startsWith(itemPath)
+    })?.label ?? null
+
+    setOpenMenu(activeParent)
+  }, [location.pathname, sidebarExpanded])
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">

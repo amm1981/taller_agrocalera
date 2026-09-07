@@ -10,6 +10,11 @@ class HourmeterValidationTest {
         assertNull(readingError("1258,7", null, true))
     }
 
+    @Test fun zeroReferenceIsTreatedAsEmpty() {
+        assertNull(readingError("2500", "0", true))
+        assertNull(readingError("1", "0.00", false))
+    }
+
     @Test fun rejectsInvalidOrNegativeReadings() {
         listOf("", "abc", "NaN", "Infinity", "-1").forEach {
             assertNotNull(readingError(it, null, true))

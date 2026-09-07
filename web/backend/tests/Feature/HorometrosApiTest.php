@@ -32,15 +32,65 @@ class HorometrosApiTest extends TestCase
             'vehiculo_id' => $vehicle->id,
             'fecha' => '2026-09-01',
             'fecha_hora_inicio' => '2026-09-01 07:30:00',
-            'horometro_inicial_confirmado' => 0,
+            'horometro_inicial_confirmado' => 2500,
             'foto_inicial' => 'evidence.jpg',
         ])->assertCreated();
 
-        $this->assertSame('0.00', $vehicle->refresh()->horometro_base);
+        $this->assertSame('2500.00', $vehicle->refresh()->horometro_base);
         $item = $this->withToken($token)->getJson('/api/vehiculos?q=TR-015')
             ->assertOk()->json('data.0');
         $this->assertTrue($item['tiene_horometro_base']);
-        $this->assertEquals(0, $item['ultimo_horometro_valido']);
+        $this->assertEquals(2500, $item['ultimo_horometro_valido']);
+    }
+
+    public function test_zero_base_is_treated_as_without_reference(): void
+    {
+        $this->seed(DatabaseSeeder::class);
+        $token = $this->adminToken();
+        $vehicle = Vehiculo::where('codigo', 'TR-015')->firstOrFail();
+        $vehicle->update(['horometro_base' => 0]);
+
+        $item = $this->withToken($token)->getJson('/api/vehiculos?q=TR-015')
+            ->assertOk()->json('data.0');
+        $this->assertFalse($item['tiene_horometro_base']);
+        $this->assertNull($item['ultimo_horometro_valido']);
+
+        $this->withToken($token)->postJson('/api/horometros/inicio', [
+            'vehiculo_id' => $vehicle->id,
+            'fecha' => '2026-09-01',
+            'fecha_hora_inicio' => '2026-09-01 07:30:00',
+            'horometro_inicial_confirmado' => 2500,
+            'foto_inicial' => 'evidence.jpg',
+        ])->assertCreated();
+
+        $this->assertSame('2500.00', $vehicle->refresh()->horometro_base);
+    }
+
+    public function test_closing_from_empty_zero_opening_does_not_create_inflated_hours(): void
+    {
+        $this->seed(DatabaseSeeder::class);
+        $token = $this->adminToken();
+        $vehicle = Vehiculo::where('codigo', 'TR-015')->firstOrFail();
+        $vehicle->update(['horometro_base' => 0]);
+
+        $recordId = $this->withToken($token)->postJson('/api/horometros/inicio', [
+            'vehiculo_id' => $vehicle->id,
+            'fecha' => '2026-09-01',
+            'fecha_hora_inicio' => '2026-09-01 07:30:00',
+            'horometro_inicial_confirmado' => 0,
+            'foto_inicial' => 'evidence.jpg',
+        ])->assertCreated()->json('data.id');
+
+        $this->withToken($token)->postJson("/api/horometros/{$recordId}/cierre", [
+            'horometro_final_confirmado' => 2500,
+            'fecha_hora_final' => '2026-09-01 07:31:00',
+            'foto_final' => 'close.jpg',
+        ])->assertOk()
+            ->assertJsonPath('data.estado', 'COMPLETO')
+            ->assertJsonPath('data.horas_trabajadas', '0.00')
+            ->assertJsonPath('data.observacion', null);
+
+        $this->assertSame('2500.00', $vehicle->refresh()->horometro_base);
     }
 
     public function test_retry_of_offline_start_does_not_create_a_duplicate(): void
@@ -278,6 +328,33 @@ class HorometrosApiTest extends TestCase
             ->assertJsonValidationErrors(['vehiculo_id']);
     }
 
+    public function test_empty_daily_record_can_be_completed_as_start(): void
+    {
+        $this->seed(DatabaseSeeder::class);
+        $token = $this->adminToken();
+        $vehicle = Vehiculo::where('codigo', 'TR-015')->firstOrFail();
+        $vehicle->update(['horometro_base' => null]);
+
+        $record = HorometroRegistro::query()->create([
+            'vehiculo_id' => $vehicle->id,
+            'fecha' => '2026-08-27',
+            'estado' => 'PENDIENTE_INICIO',
+        ]);
+
+        $this
+            ->withToken($token)
+            ->postJson('/api/horometros/inicio', [
+                'vehiculo_id' => $vehicle->id,
+                'fecha' => '2026-08-27',
+                'horometro_inicial_confirmado' => 2500,
+                'foto_inicial' => 'inicio.jpg',
+                'fecha_hora_inicio' => '2026-08-27 07:10:00',
+            ])
+            ->assertCreated()
+            ->assertJsonPath('data.id', $record->id)
+            ->assertJsonPath('data.estado', 'EN_JORNADA');
+    }
+
     public function test_continuity_mismatch_is_rejected_with_last_valid_value(): void
     {
         $this->seed(DatabaseSeeder::class);
@@ -388,6 +465,47 @@ class HorometrosApiTest extends TestCase
         $this->assertStringContainsString('Revision operativa', $sheet);
         $this->assertStringContainsString('OBSERVADO', $sheet);
         $this->assertStringNotContainsString('800', $sheet);
+    }
+
+    public function test_only_admin_can_delete_hourmeter_records(): void
+    {
+        config(['filesystems.evidence_disk' => 'public']);
+        Storage::fake('public');
+        $this->seed(DatabaseSeeder::class);
+        $record = $this->registroEnJornada('2026-08-26', 700);
+        $record->update([
+            'foto_inicial' => 'horometros/2026/08/26/inicio.jpg',
+            'foto_final' => 'horometros/2026/08/26/final.jpg',
+        ]);
+        Storage::disk('public')->put($record->foto_inicial, 'inicio');
+        Storage::disk('public')->put($record->foto_final, 'final');
+
+        $this
+            ->withToken($this->adminToken())
+            ->deleteJson("/api/horometros/registros/{$record->id}")
+            ->assertNoContent();
+
+        $this->assertDatabaseMissing(HorometroRegistro::class, ['id' => $record->id]);
+        Storage::disk('public')->assertMissing('horometros/2026/08/26/inicio.jpg');
+        Storage::disk('public')->assertMissing('horometros/2026/08/26/final.jpg');
+    }
+
+    public function test_non_admin_cannot_delete_hourmeter_records(): void
+    {
+        $this->seed(DatabaseSeeder::class);
+        $record = $this->registroEnJornada('2026-08-26', 700);
+        $user = User::factory()->create([
+            'email' => 'supervisor.horometros@agrocontrol.local',
+            'username' => 'supervisor.horometros',
+        ]);
+        $user->assignRole('SUPERVISOR_HOROMETROS');
+
+        $this
+            ->withToken($user->createToken('feature-test')->plainTextToken)
+            ->deleteJson("/api/horometros/registros/{$record->id}")
+            ->assertForbidden();
+
+        $this->assertDatabaseHas(HorometroRegistro::class, ['id' => $record->id]);
     }
 
     public function test_user_without_horometros_permission_cannot_register_start(): void

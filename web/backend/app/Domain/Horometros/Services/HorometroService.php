@@ -50,7 +50,7 @@ class HorometroService
                     'fecha' => $fecha,
                 ]);
 
-            if ($registro->exists && ! $reapertura) {
+            if ($registro->exists && ! $reapertura && $registro->horometro_inicial_confirmado !== null) {
                 throw ValidationException::withMessages([
                     'vehiculo_id' => ['Ya existe un registro para el vehículo y fecha indicados.'],
                 ]);
@@ -78,7 +78,7 @@ class HorometroService
                 'observacion' => null,
             ])->save();
 
-            if ($vehiculo->horometro_base === null) {
+            if ($this->referenciaValida($vehiculo->horometro_base) === null && $this->referenciaValida($data['horometro_inicial_confirmado']) !== null) {
                 $vehiculo->update(['horometro_base' => $data['horometro_inicial_confirmado']]);
             }
 
@@ -112,34 +112,30 @@ class HorometroService
                 ]);
             }
 
-            $ultimo = HorometroRegistro::query()
-                ->where('vehiculo_id', $vehiculo->id)
-                ->where('id', '!=', $registro->id)
-                ->whereNotNull('horometro_inicial_confirmado')
-                ->orderByDesc('fecha')->orderByDesc('id')->first();
-            $referencia = max((float) $vehiculo->horometro_base, (float) ($ultimo?->horometro_final_confirmado ?? $ultimo?->horometro_inicial_confirmado));
-            if ((float) $data['horometro_final_confirmado'] < $referencia) {
+            $referenciaAnterior = $this->ultimaReferenciaValida($vehiculo->id, excluirRegistroId: $registro->id)
+                ?? $this->referenciaValida($vehiculo->horometro_base);
+            $referenciaBaseCierre = $this->referenciaValida($registro->horometro_inicial_confirmado) ?? $referenciaAnterior;
+            if ($referenciaAnterior !== null && (float) $data['horometro_final_confirmado'] < $referenciaAnterior) {
                 throw ValidationException::withMessages([
-                    'horometro_final_confirmado' => ["El cierre no puede ser menor al ultimo horometro valido: {$referencia}."],
+                    'horometro_final_confirmado' => ['El cierre no puede ser menor al ultimo horometro valido: '.$this->formatHorometro($referenciaAnterior).'.'],
                 ]);
             }
 
-            if ((float) $data['horometro_final_confirmado'] < (float) $registro->horometro_inicial_confirmado) {
+            if ($referenciaBaseCierre !== null && (float) $data['horometro_final_confirmado'] < $referenciaBaseCierre) {
                 throw ValidationException::withMessages([
                     'horometro_final_confirmado' => [
                         sprintf(
                             'El horómetro final no puede ser menor al horómetro inicial. Horómetro inicial válido: %s. Valor ingresado: %s.',
-                            $this->formatHorometro((float) $registro->horometro_inicial_confirmado),
+                            $this->formatHorometro($referenciaBaseCierre),
                             $this->formatHorometro((float) $data['horometro_final_confirmado']),
                         ),
                     ],
                 ]);
             }
 
-            $horasTrabajadas = round(
-                (float) $data['horometro_final_confirmado'] - (float) $registro->horometro_inicial_confirmado,
-                2,
-            );
+            $horasTrabajadas = $referenciaBaseCierre === null
+                ? 0.0
+                : round((float) $data['horometro_final_confirmado'] - $referenciaBaseCierre, 2);
 
             $estado = 'COMPLETO';
             $observacion = $registro->observacion;
@@ -160,6 +156,10 @@ class HorometroService
                 'estado' => $estado,
                 'observacion' => $observacion,
             ]);
+
+            if ($this->referenciaValida($vehiculo->horometro_base) === null && $this->referenciaValida($data['horometro_final_confirmado']) !== null) {
+                $vehiculo->update(['horometro_base' => $data['horometro_final_confirmado']]);
+            }
 
             $this->consumirReapertura($reapertura);
 
@@ -258,17 +258,8 @@ class HorometroService
 
     private function validarContinuidadInicio(int $vehiculoId, string $fecha, float $horometroInicial): void
     {
-        $cierreAnterior = HorometroRegistro::query()
-            ->where('vehiculo_id', $vehiculoId)
-            ->whereDate('fecha', '<', $fecha)
-            ->whereNotNull('horometro_inicial_confirmado')
-            ->orderByDesc('fecha')
-            ->orderByDesc('id')
-            ->first();
-
-        $cierreAnterior = $cierreAnterior?->horometro_final_confirmado
-            ?? $cierreAnterior?->horometro_inicial_confirmado
-            ?? Vehiculo::query()->whereKey($vehiculoId)->value('horometro_base');
+        $cierreAnterior = $this->ultimaReferenciaValida($vehiculoId, antesDeFecha: $fecha)
+            ?? $this->referenciaValida(Vehiculo::query()->whereKey($vehiculoId)->value('horometro_base'));
 
         $tolerancia = (float) $this->configuracion()->tolerancia_inicio_horas;
 
@@ -369,6 +360,35 @@ class HorometroService
     private function formatHorometro(float $value): string
     {
         return number_format($value, 2, '.', '');
+    }
+
+    private function referenciaValida(mixed $value): ?float
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+
+        $reference = round((float) $value, 2);
+
+        return $reference > 0 ? $reference : null;
+    }
+
+    private function ultimaReferenciaValida(int $vehiculoId, ?string $antesDeFecha = null, ?int $excluirRegistroId = null): ?float
+    {
+        return HorometroRegistro::query()
+            ->where('vehiculo_id', $vehiculoId)
+            ->when($antesDeFecha, fn ($query, string $fecha) => $query->whereDate('fecha', '<', $fecha))
+            ->when($excluirRegistroId, fn ($query, int $id) => $query->whereKeyNot($id))
+            ->where(function ($query) {
+                $query->where('horometro_final_confirmado', '>', 0)
+                    ->orWhere('horometro_inicial_confirmado', '>', 0);
+            })
+            ->orderByDesc('fecha')
+            ->orderByDesc('id')
+            ->get()
+            ->map(fn (HorometroRegistro $registro) => $this->referenciaValida($registro->horometro_final_confirmado)
+                ?? $this->referenciaValida($registro->horometro_inicial_confirmado))
+            ->first();
     }
 
     private function loadRegistro(HorometroRegistro $registro): HorometroRegistro

@@ -47,6 +47,10 @@ export async function exportHorometroRegistros(filters?: HorometroFilters) {
   return data
 }
 
+export async function deleteHorometroRegistro(id: number) {
+  await api.delete(`/horometros/registros/${id}`)
+}
+
 export async function getHorometroPendientes(filters?: HorometroFilters) {
   const { data } = await api.get<PaginatedResponse<HorometroRegistro>>('/horometros/pendientes', {
     params: cleanParams(filters),

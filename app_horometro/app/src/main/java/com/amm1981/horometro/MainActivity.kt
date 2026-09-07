@@ -1925,7 +1925,8 @@ fun StartScreen(
     val selectedOperator = operators.firstOrNull { it.id == operatorId }
     val localValues = localRecords.filter { it.vehicleId == vehicleId }
         .mapNotNull { (it.finalConfirmed ?: it.initialConfirmed).toBigDecimalOrNull() }
-    val reference = (localValues + listOfNotNull(selected?.lastValid?.toBigDecimalOrNull())).maxOrNull()?.toPlainString()
+        .filter { it > java.math.BigDecimal.ZERO }
+    val reference = (localValues + listOfNotNull(selected?.lastValid?.toBigDecimalOrNull()?.takeIf { it > java.math.BigDecimal.ZERO })).maxOrNull()?.toPlainString()
     val validation = readingError(reading, reference, true, config.startToleranceHours)
     val vehicleLabel = if (registrationType == RegistrationType.TRACTORS) "Tractor" else "Vehiculo"
     BackHandler { onCancel() }
@@ -2009,8 +2010,8 @@ fun StartScreen(
 }
 
 private fun latestLocalReference(vehicleId: Int, initial: String, vehicles: List<Vehicle>, records: List<LocalHourmeterRecord>): String {
-    return (records.filter { it.vehicleId == vehicleId }.mapNotNull { (it.finalConfirmed ?: it.initialConfirmed).toBigDecimalOrNull() }
-        + listOfNotNull(initial.toBigDecimalOrNull(), vehicles.firstOrNull { it.id == vehicleId }?.lastValid?.toBigDecimalOrNull()))
+    return (records.filter { it.vehicleId == vehicleId }.mapNotNull { (it.finalConfirmed ?: it.initialConfirmed).toBigDecimalOrNull()?.takeIf { value -> value > java.math.BigDecimal.ZERO } }
+        + listOfNotNull(initial.toBigDecimalOrNull()?.takeIf { it > java.math.BigDecimal.ZERO }, vehicles.firstOrNull { it.id == vehicleId }?.lastValid?.toBigDecimalOrNull()?.takeIf { it > java.math.BigDecimal.ZERO }))
         .maxOrNull()?.toPlainString() ?: initial
 }
 

@@ -133,6 +133,7 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/registros', [HorometrosRegistroController::class, 'index']);
             Route::get('/registros/export', [HorometrosRegistroController::class, 'export']);
             Route::get('/registros/{registro}', [HorometrosRegistroController::class, 'show']);
+            Route::delete('/registros/{registro}', [HorometrosRegistroController::class, 'destroy']);
             Route::get('/pendientes', [HorometrosRegistroController::class, 'pendientes']);
             Route::get('/validaciones', [HorometrosRegistroController::class, 'validaciones']);
             Route::get('/reaperturas', [HorometrosReaperturaController::class, 'index']);

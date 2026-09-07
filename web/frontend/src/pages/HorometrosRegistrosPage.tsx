@@ -1,7 +1,8 @@
-import { useMutation, useQuery } from '@tanstack/react-query'
-import { Camera, Download, Eye, RefreshCw, X } from 'lucide-react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Camera, Download, Eye, RefreshCw, Trash2, X } from 'lucide-react'
 import { useState } from 'react'
 import { Button } from '../components/ui/button'
+import { useAuth } from '../features/auth/AuthContext'
 import { getOperarios, getVehiculos } from '../features/maestros/masterDataService'
 import {
   getFundosMaster,
@@ -9,7 +10,7 @@ import {
   getSedesMaster,
   getTiposVehiculoMaster,
 } from '../features/maestros/maestrosService'
-import { exportHorometroRegistros, getHorometroRegistros } from '../features/horometros/horometrosService'
+import { deleteHorometroRegistro, exportHorometroRegistros, getHorometroRegistros } from '../features/horometros/horometrosService'
 import type { HorometroFilters, HorometroRegistro } from '../features/horometros/types'
 import { StatusBadge } from '../features/taller/components/StatusBadge'
 import { FilterField, inputClass } from '../features/taller/components/FilterField'
@@ -20,8 +21,11 @@ import { AppLayout } from '../layouts/AppLayout'
 const estados = ['PENDIENTE_INICIO', 'EN_JORNADA', 'COMPLETO', 'SIN_INICIO', 'SIN_CIERRE', 'INCONSISTENCIA', 'REGULARIZADO', 'OBSERVADO', 'ANULADO']
 
 export function HorometrosRegistrosPage() {
+  const queryClient = useQueryClient()
+  const { session } = useAuth()
   const [filters, setFilters] = useState<HorometroFilters>({ per_page: 30 })
   const [selected, setSelected] = useState<HorometroRegistro | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<HorometroRegistro | null>(null)
   const registros = useQuery({
     queryKey: ['horometros-registros', filters],
     queryFn: () => getHorometroRegistros(filters),
@@ -44,6 +48,19 @@ export function HorometrosRegistrosPage() {
       link.click()
       link.remove()
       window.URL.revokeObjectURL(url)
+    },
+  })
+  const canDelete = session?.roles.includes('ADMINISTRADOR') || session?.user.username === 'administrador'
+  const deleteMutation = useMutation({
+    mutationFn: (id: number) => deleteHorometroRegistro(id),
+    onSuccess: async () => {
+      setDeleteTarget(null)
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['horometros-registros'] }),
+        queryClient.invalidateQueries({ queryKey: ['horometros-dashboard'] }),
+        queryClient.invalidateQueries({ queryKey: ['horometros-validaciones'] }),
+        queryClient.invalidateQueries({ queryKey: ['horometros-reaperturas'] }),
+      ])
     },
   })
 
@@ -152,7 +169,7 @@ export function HorometrosRegistrosPage() {
                 <th className="border-b border-slate-200 px-4 py-3">Lecturas</th>
                 <th className="border-b border-slate-200 px-4 py-3">Estado</th>
                 <th className="border-b border-slate-200 px-4 py-3">Evidencia</th>
-                <th className="border-b border-slate-200 px-4 py-3">Acción</th>
+                <th className="border-b border-slate-200 px-4 py-3">Acciones</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -184,6 +201,7 @@ export function HorometrosRegistrosPage() {
                     </span>
                   </td>
                   <td className="px-4 py-3 align-top">
+                    <div className="flex items-center gap-2">
                     <button
                       type="button"
                       onClick={() => setSelected(registro)}
@@ -193,6 +211,18 @@ export function HorometrosRegistrosPage() {
                     >
                       <Eye className="h-5 w-5" style={{ color: '#5fcf49' }} aria-hidden="true" />
                     </button>
+                    {canDelete ? (
+                      <button
+                        type="button"
+                        onClick={() => setDeleteTarget(registro)}
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-red-100 bg-white text-red-600 transition-colors hover:bg-red-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500"
+                        title="Eliminar registro"
+                        aria-label="Eliminar registro"
+                      >
+                        <Trash2 className="h-4 w-4" aria-hidden="true" />
+                      </button>
+                    ) : null}
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -215,7 +245,61 @@ export function HorometrosRegistrosPage() {
       </section>
 
       {selected ? <RegistroDetailModal registro={selected} onClose={() => setSelected(null)} /> : null}
+      {deleteTarget ? (
+        <DeleteRegistroModal
+          registro={deleteTarget}
+          loading={deleteMutation.isPending}
+          error={deleteMutation.error instanceof Error ? deleteMutation.error.message : null}
+          onClose={() => setDeleteTarget(null)}
+          onConfirm={() => deleteMutation.mutate(deleteTarget.id)}
+        />
+      ) : null}
     </AppLayout>
+  )
+}
+
+function DeleteRegistroModal({
+  registro,
+  loading,
+  error,
+  onClose,
+  onConfirm,
+}: {
+  registro: HorometroRegistro
+  loading: boolean
+  error: string | null
+  onClose: () => void
+  onConfirm: () => void
+}) {
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/45 p-4 backdrop-blur-sm">
+      <section className="w-full max-w-lg rounded-xl bg-white shadow-2xl">
+        <div className="flex items-start justify-between border-b border-slate-100 px-5 py-4">
+          <div>
+            <h2 className="text-lg font-black text-slate-950">Eliminar registro</h2>
+            <p className="text-sm font-medium text-slate-500">Esta acción eliminará el registro seleccionado.</p>
+          </div>
+          <button className="grid h-9 w-9 place-items-center rounded-lg text-slate-500 hover:bg-slate-100" type="button" onClick={onClose} aria-label="Cerrar eliminación">
+            <X className="h-5 w-5" aria-hidden="true" />
+          </button>
+        </div>
+        <div className="grid gap-4 p-5">
+          <div className="rounded-lg border border-red-100 bg-red-50 px-4 py-3 text-sm font-semibold text-red-800">
+            Se eliminará el registro de {vehicleName(registro.vehiculo)} del {formatDateTime(registro.fecha_hora_inicio ?? registro.fecha)}.
+          </div>
+          {error ? (
+            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">{error}</div>
+          ) : null}
+          <div className="flex justify-end gap-3">
+            <Button variant="secondary" onClick={onClose} disabled={loading}>Cancelar</Button>
+            <Button className="bg-red-600 text-white hover:bg-red-700" onClick={onConfirm} disabled={loading}>
+              <Trash2 className="h-4 w-4" aria-hidden="true" />
+              Eliminar
+            </Button>
+          </div>
+        </div>
+      </section>
+    </div>
   )
 }
 

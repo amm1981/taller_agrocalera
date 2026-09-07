@@ -35,6 +35,10 @@ class VehiculoController extends Controller
                 ->selectRaw('COALESCE(horometro_final_confirmado, horometro_inicial_confirmado)')
                 ->whereColumn('vehiculo_id', 'vehiculos.id')
                 ->whereNotNull('horometro_inicial_confirmado')
+                ->where(function (Builder $query) {
+                    $query->where('horometro_final_confirmado', '>', 0)
+                        ->orWhere('horometro_inicial_confirmado', '>', 0);
+                })
                 ->orderByDesc('fecha')
                 ->orderByDesc('id')
                 ->limit(1)])
@@ -58,8 +62,8 @@ class VehiculoController extends Controller
 
         $page = $query->orderBy('codigo')->paginate($this->perPage());
         $page->getCollection()->each(function (Vehiculo $vehiculo) {
-            $vehiculo->ultimo_horometro_valido ??= $vehiculo->horometro_base;
-            $vehiculo->tiene_horometro_base = $vehiculo->ultimo_horometro_valido !== null;
+            $vehiculo->ultimo_horometro_valido ??= ((float) $vehiculo->horometro_base > 0 ? $vehiculo->horometro_base : null);
+            $vehiculo->tiene_horometro_base = $vehiculo->ultimo_horometro_valido !== null && (float) $vehiculo->ultimo_horometro_valido > 0;
         });
 
         return $this->paginated($page);

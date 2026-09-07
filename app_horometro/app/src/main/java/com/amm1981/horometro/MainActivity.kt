@@ -142,8 +142,6 @@ import org.json.JSONObject
 private const val DEFAULT_API_URL = "https://taller.agrocalera.app/api"
 private const val DEFAULT_RESPONSIBLE_EMAIL = "admin@agrocontrol.local"
 private const val DEFAULT_RESPONSIBLE_PASSWORD = "admin123"
-private const val SETTINGS_FILE = "horometro_settings"
-private const val API_URL_KEY = "api_url"
 private val AppBackground = Color(0xFFF6F8F7)
 private val AppGreen = Color(0xFF087A3D)
 private val AppGreenDark = Color(0xFF064E3B)
@@ -661,22 +659,6 @@ private fun <T> JSONArray.mapJsonObjects(transform: (JSONObject) -> T): List<T> 
 private const val FIELD_DATA_CACHE_FILE = "horometro_field_data_cache.json"
 private const val LOCAL_RECORDS_CACHE_FILE = "horometro_local_records.json"
 
-private fun loadBaseUrl(context: Context): String {
-    return context
-        .getSharedPreferences(SETTINGS_FILE, Context.MODE_PRIVATE)
-        .getString(API_URL_KEY, DEFAULT_API_URL)
-        ?.ifBlank { DEFAULT_API_URL }
-        ?: DEFAULT_API_URL
-}
-
-private fun saveBaseUrl(context: Context, baseUrl: String) {
-    context
-        .getSharedPreferences(SETTINGS_FILE, Context.MODE_PRIVATE)
-        .edit()
-        .putString(API_URL_KEY, baseUrl.trim())
-        .apply()
-}
-
 private fun saveFieldDataCache(context: Context, cached: CachedFieldData) {
     runCatching {
         File(context.filesDir, FIELD_DATA_CACHE_FILE).writeText(cached.toJson().toString())
@@ -948,7 +930,6 @@ class MainActivity : ComponentActivity() {
 fun HorometroApp() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var baseUrl by remember { mutableStateOf(loadBaseUrl(context)) }
     var session by remember { mutableStateOf<AppSession?>(null) }
     var syncSession by remember { mutableStateOf<AppSession?>(null) }
     var selectedType by remember { mutableStateOf<RegistrationType?>(null) }
@@ -956,7 +937,7 @@ fun HorometroApp() {
     var syncLoading by remember { mutableStateOf(false) }
     var syncProgress by remember { mutableStateOf(0) }
     var syncError by remember { mutableStateOf<String?>(null) }
-    val api = remember(baseUrl) { AgroControlApi(baseUrl.trimEnd('/')) }
+    val api = remember { AgroControlApi(DEFAULT_API_URL.trimEnd('/')) }
 
     LaunchedEffect(Unit) {
         cachedData = loadFieldDataCache(context)
@@ -994,11 +975,6 @@ fun HorometroApp() {
             syncing = syncLoading,
             syncProgress = syncProgress,
             syncError = syncError,
-            baseUrl = baseUrl,
-            onBaseUrlChange = {
-                baseUrl = it
-                saveBaseUrl(context, it)
-            },
             onSync = ::syncMasters,
             onTractors = {
                 selectedType = RegistrationType.TRACTORS
@@ -1009,8 +985,6 @@ fun HorometroApp() {
         )
 
         selectedType == RegistrationType.HEAVY && session == null -> ResponsibleLoginScreen(
-            baseUrl = baseUrl,
-            onBaseUrlChange = { baseUrl = it },
             onLogin = { email, password -> api.login(email, password) },
             onLoggedIn = { session = it },
             onBack = { selectedType = null },
@@ -1071,8 +1045,6 @@ fun VehicleTypeSelectionScreen(
     syncing: Boolean,
     syncProgress: Int,
     syncError: String?,
-    baseUrl: String,
-    onBaseUrlChange: (String) -> Unit,
     onSync: () -> Unit,
     onTractors: () -> Unit,
     onHeavy: () -> Unit,
@@ -1175,7 +1147,6 @@ fun VehicleTypeSelectionScreen(
             val syncLabel = lastSync?.let { "Ultima sincronizacion: ${displayDateTime(it)}" }
                 ?: "Sin datos locales sincronizados."
             InfoLine(syncLabel, compact = true)
-            AppTextField("API", baseUrl, onBaseUrlChange)
             if (syncError != null) {
                 ErrorBox(syncError)
             }
@@ -1249,8 +1220,6 @@ fun SimpleTopBar(title: String, subtitle: String, onBack: (() -> Unit)? = null, 
 
 @Composable
 fun ResponsibleLoginScreen(
-    baseUrl: String,
-    onBaseUrlChange: (String) -> Unit,
     onLogin: suspend (String, String) -> AppSession,
     onLoggedIn: (AppSession) -> Unit,
     onBack: () -> Unit,
@@ -1332,15 +1301,6 @@ fun ResponsibleLoginScreen(
                 }
             }
             InfoLine("El responsable quedara asociado a todos los registros realizados hoy.")
-            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                AppTextField("API", baseUrl, onBaseUrlChange)
-                Text(
-                    "En celular fisico usa la IP de la laptop en la misma red Wi-Fi.",
-                    color = AppMuted,
-                    fontWeight = FontWeight.SemiBold,
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
         }
     }
 }

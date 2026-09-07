@@ -2,8 +2,9 @@
 
 namespace Tests\Feature;
 
-use App\Models\HorometroRegistro;
 use App\Models\Fundo;
+use App\Models\HorometroConfiguracion;
+use App\Models\HorometroRegistro;
 use App\Models\Lote;
 use App\Models\Personal;
 use App\Models\Sector;
@@ -18,6 +19,93 @@ use Tests\TestCase;
 class HorometrosApiTest extends TestCase
 {
     use RefreshDatabase;
+
+    public function test_first_manual_reading_sets_base_and_catalog_sync_exposes_it(): void
+    {
+        $this->seed(DatabaseSeeder::class);
+        $token = $this->adminToken();
+        $vehicle = Vehiculo::where('codigo', 'TR-015')->firstOrFail();
+        $vehicle->update(['horometro_base' => null]);
+
+        $this->withToken($token)->postJson('/api/horometros/inicio', [
+            'vehiculo_id' => $vehicle->id,
+            'fecha' => '2026-09-01',
+            'fecha_hora_inicio' => '2026-09-01 07:30:00',
+            'horometro_inicial_confirmado' => 0,
+            'foto_inicial' => 'evidence.jpg',
+        ])->assertCreated();
+
+        $this->assertSame('0.00', $vehicle->refresh()->horometro_base);
+        $item = $this->withToken($token)->getJson('/api/vehiculos?q=TR-015')
+            ->assertOk()->json('data.0');
+        $this->assertTrue($item['tiene_horometro_base']);
+        $this->assertEquals(0, $item['ultimo_horometro_valido']);
+    }
+
+    public function test_retry_of_offline_start_does_not_create_a_duplicate(): void
+    {
+        $this->seed(DatabaseSeeder::class);
+        $token = $this->adminToken();
+        $payload = [
+            'client_reference' => 'offline-test-unique',
+            'vehiculo_id' => Vehiculo::where('codigo', 'TR-015')->value('id'),
+            'fecha' => '2026-09-01',
+            'fecha_hora_inicio' => '2026-09-01 07:30:00',
+            'horometro_inicial_confirmado' => 50,
+            'foto_inicial' => 'evidence.jpg',
+        ];
+        $first = $this->withToken($token)->postJson('/api/horometros/inicio', $payload)->assertCreated();
+        $this->withToken($token)->postJson('/api/horometros/inicio', $payload)
+            ->assertCreated()->assertJsonPath('data.id', $first->json('data.id'));
+        $this->assertSame(1, HorometroRegistro::where('client_reference', 'offline-test-unique')->count());
+    }
+
+    public function test_manual_start_uses_base_and_last_close_across_days_without_activity(): void
+    {
+        $this->seed(DatabaseSeeder::class);
+        $token = $this->adminToken();
+        $vehicle = Vehiculo::where('codigo', 'TR-015')->firstOrFail();
+        $vehicle->update(['horometro_base' => 100]);
+        $payload = [
+            'vehiculo_id' => $vehicle->id,
+            'fecha' => '2026-09-01',
+            'fecha_hora_inicio' => '2026-09-01 07:30:00',
+            'foto_inicial' => 'evidence.jpg',
+        ];
+        foreach ([99, 101] as $value) {
+            $this->withToken($token)->postJson('/api/horometros/inicio', [
+                ...$payload, 'horometro_inicial_confirmado' => $value,
+            ])->assertUnprocessable()->assertJsonValidationErrors('horometro_inicial_confirmado');
+        }
+        $id = $this->withToken($token)->postJson('/api/horometros/inicio', [
+            ...$payload, 'horometro_inicial_confirmado' => 100,
+        ])->assertCreated()->json('data.id');
+        $this->withToken($token)->postJson("/api/horometros/{$id}/cierre", [
+            'horometro_final_confirmado' => 105,
+            'fecha_hora_final' => '2026-09-01 18:00:00',
+            'foto_final' => 'close.jpg',
+        ])->assertOk();
+        $this->withToken($token)->postJson('/api/horometros/inicio', [
+            ...$payload, 'fecha' => '2026-09-04',
+            'fecha_hora_inicio' => '2026-09-04 07:30:00',
+            'horometro_inicial_confirmado' => 105,
+        ])->assertCreated();
+    }
+
+    public function test_tolerance_never_allows_reading_below_reference(): void
+    {
+        $this->seed(DatabaseSeeder::class);
+        $vehicle = Vehiculo::where('codigo', 'TR-015')->firstOrFail();
+        $vehicle->update(['horometro_base' => 100]);
+        HorometroConfiguracion::query()->firstOrFail()->update(['tolerancia_inicio_horas' => 1]);
+        $this->withToken($this->adminToken())->postJson('/api/horometros/inicio', [
+            'vehiculo_id' => $vehicle->id,
+            'fecha' => '2026-09-01',
+            'fecha_hora_inicio' => '2026-09-01 07:30:00',
+            'foto_inicial' => 'evidence.jpg',
+            'horometro_inicial_confirmado' => 99.5,
+        ])->assertUnprocessable()->assertJsonValidationErrors('horometro_inicial_confirmado');
+    }
 
     public function test_admin_can_register_start_and_close_hourmeter_record(): void
     {

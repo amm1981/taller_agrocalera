@@ -6,6 +6,7 @@ use App\Models\HorometroConfiguracion;
 use App\Models\HorometroReapertura;
 use App\Models\HorometroRegistro;
 use App\Models\User;
+use App\Models\Vehiculo;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
@@ -18,6 +19,17 @@ class HorometroService
     public function registrarInicio(array $data, User $user): HorometroRegistro
     {
         return DB::transaction(function () use ($data, $user) {
+            $vehiculo = Vehiculo::query()->lockForUpdate()->findOrFail($data['vehiculo_id']);
+            if (! empty($data['client_reference'])) {
+                $existing = HorometroRegistro::query()->where('client_reference', $data['client_reference'])->first();
+                if ($existing !== null) {
+                    if ($existing->vehiculo_id !== $vehiculo->id || (float) $existing->horometro_inicial_confirmado !== (float) $data['horometro_inicial_confirmado']) {
+                        throw ValidationException::withMessages(['client_reference' => ['La referencia de envio ya corresponde a otro registro.']]);
+                    }
+
+                    return $this->loadRegistro($existing);
+                }
+            }
             $fechaHora = $this->fechaHora($data['fecha_hora_inicio'] ?? null);
             $fecha = CarbonImmutable::parse($data['fecha'] ?? $fechaHora->toDateString())->toDateString();
             $reapertura = $this->reaperturaDisponible((int) $data['vehiculo_id'], $fecha, 'INICIO');
@@ -51,6 +63,7 @@ class HorometroService
             );
 
             $registro->fill([
+                'client_reference' => $data['client_reference'] ?? null,
                 'operario_id' => $data['operario_id'] ?? $registro->operario_id,
                 'usuario_responsable_id' => $user->id,
                 'fundo_id' => $data['fundo_id'] ?? $registro->fundo_id,
@@ -65,6 +78,10 @@ class HorometroService
                 'observacion' => null,
             ])->save();
 
+            if ($vehiculo->horometro_base === null) {
+                $vehiculo->update(['horometro_base' => $data['horometro_inicial_confirmado']]);
+            }
+
             $this->consumirReapertura($reapertura);
 
             return $this->loadRegistro($registro);
@@ -77,6 +94,8 @@ class HorometroService
     public function registrarCierre(HorometroRegistro $registro, array $data, User $user): HorometroRegistro
     {
         return DB::transaction(function () use ($registro, $data, $user) {
+            $vehiculo = Vehiculo::query()->lockForUpdate()->findOrFail($registro->vehiculo_id);
+            $registro->refresh();
             $fechaHora = $this->fechaHora($data['fecha_hora_final'] ?? null);
             $reapertura = $this->reaperturaDisponible($registro->vehiculo_id, $registro->fecha->toDateString(), 'CIERRE');
             $config = $this->configuracion();
@@ -90,6 +109,18 @@ class HorometroService
             if ($registro->horometro_inicial_confirmado === null) {
                 throw ValidationException::withMessages([
                     'horometro_inicial_confirmado' => ['El registro no tiene horómetro inicial.'],
+                ]);
+            }
+
+            $ultimo = HorometroRegistro::query()
+                ->where('vehiculo_id', $vehiculo->id)
+                ->where('id', '!=', $registro->id)
+                ->whereNotNull('horometro_inicial_confirmado')
+                ->orderByDesc('fecha')->orderByDesc('id')->first();
+            $referencia = max((float) $vehiculo->horometro_base, (float) ($ultimo?->horometro_final_confirmado ?? $ultimo?->horometro_inicial_confirmado));
+            if ((float) $data['horometro_final_confirmado'] < $referencia) {
+                throw ValidationException::withMessages([
+                    'horometro_final_confirmado' => ["El cierre no puede ser menor al ultimo horometro valido: {$referencia}."],
                 ]);
             }
 
@@ -142,8 +173,7 @@ class HorometroService
         User $user,
         ?string $motivo = null,
         ?CarbonImmutable $vigenteHasta = null,
-    ): HorometroReapertura
-    {
+    ): HorometroReapertura {
         return DB::transaction(function () use ($registro, $tipoRegistro, $user, $motivo, $vigenteHasta) {
             $estadoPosterior = $tipoRegistro === 'INICIO' ? 'PENDIENTE_INICIO' : 'SIN_CIERRE';
 
@@ -230,9 +260,15 @@ class HorometroService
     {
         $cierreAnterior = HorometroRegistro::query()
             ->where('vehiculo_id', $vehiculoId)
-            ->whereDate('fecha', CarbonImmutable::parse($fecha)->subDay()->toDateString())
-            ->whereNotNull('horometro_final_confirmado')
-            ->value('horometro_final_confirmado');
+            ->whereDate('fecha', '<', $fecha)
+            ->whereNotNull('horometro_inicial_confirmado')
+            ->orderByDesc('fecha')
+            ->orderByDesc('id')
+            ->first();
+
+        $cierreAnterior = $cierreAnterior?->horometro_final_confirmado
+            ?? $cierreAnterior?->horometro_inicial_confirmado
+            ?? Vehiculo::query()->whereKey($vehiculoId)->value('horometro_base');
 
         $tolerancia = (float) $this->configuracion()->tolerancia_inicio_horas;
 
@@ -243,7 +279,7 @@ class HorometroService
         $ultimoValido = round((float) $cierreAnterior, 2);
         $valorIngresado = round($horometroInicial, 2);
 
-        if (abs($ultimoValido - $valorIngresado) <= $tolerancia) {
+        if ($valorIngresado >= $ultimoValido && round(abs($ultimoValido - $valorIngresado), 2) <= $tolerancia) {
             return;
         }
 

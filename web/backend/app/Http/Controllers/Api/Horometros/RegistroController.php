@@ -5,8 +5,8 @@ namespace App\Http\Controllers\Api\Horometros;
 use App\Domain\Horometros\Services\HorometroService;
 use App\Http\Controllers\Api\Concerns\FormatsApiPagination;
 use App\Http\Controllers\Controller;
-use App\Models\HorometroRegistro;
 use App\Models\HorometroConfiguracion;
+use App\Models\HorometroRegistro;
 use App\Models\Lote;
 use App\Models\Sector;
 use Carbon\CarbonImmutable;
@@ -22,9 +22,7 @@ class RegistroController extends Controller
 {
     use FormatsApiPagination;
 
-    public function __construct(private readonly HorometroService $service)
-    {
-    }
+    public function __construct(private readonly HorometroService $service) {}
 
     public function index(Request $request): array
     {
@@ -46,6 +44,7 @@ class RegistroController extends Controller
 
         $data = $request->validate([
             'vehiculo_id' => ['required', 'integer', Rule::exists('vehiculos', 'id')],
+            'client_reference' => ['nullable', 'string', 'max:100'],
             'fecha' => ['nullable', 'date'],
             'operario_id' => ['nullable', 'integer', Rule::exists('personal', 'id')],
             'fundo_id' => ['nullable', 'integer', Rule::exists('fundos', 'id')],
@@ -199,7 +198,7 @@ class RegistroController extends Controller
     }
 
     /**
-     * @param array<string, mixed> $data
+     * @param  array<string, mixed>  $data
      * @return array<string, mixed>
      */
     private function normalizeLocation(array $data): array

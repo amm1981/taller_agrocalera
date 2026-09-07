@@ -7,15 +7,15 @@ use App\Http\Controllers\Api\Concerns\FormatsApiPagination;
 use App\Http\Controllers\Controller;
 use App\Models\HorometroRegistro;
 use App\Models\OrdenTrabajo;
-use App\Models\SolicitudRepuesto;
 use App\Models\Sede;
+use App\Models\SolicitudRepuesto;
 use App\Models\TipoVehiculo;
 use App\Models\Vehiculo;
 use App\Support\SimpleXlsx;
-use Illuminate\Support\Carbon;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
@@ -26,13 +26,18 @@ class VehiculoController extends Controller
 {
     use FormatsApiPagination;
 
-    public function __construct(private readonly PreventivoService $preventivoService)
-    {
-    }
+    public function __construct(private readonly PreventivoService $preventivoService) {}
 
     public function index(Request $request): array
     {
         $query = Vehiculo::query()
+            ->addSelect(['ultimo_horometro_valido' => HorometroRegistro::query()
+                ->selectRaw('COALESCE(horometro_final_confirmado, horometro_inicial_confirmado)')
+                ->whereColumn('vehiculo_id', 'vehiculos.id')
+                ->whereNotNull('horometro_inicial_confirmado')
+                ->orderByDesc('fecha')
+                ->orderByDesc('id')
+                ->limit(1)])
             ->with(['tipoVehiculo', 'gerencia', 'sede', 'fundo', 'sector', 'lote'])
             ->when($request->string('q')->toString(), function (Builder $q, string $search) {
                 $q->where(function (Builder $nested) use ($search) {
@@ -51,7 +56,13 @@ class VehiculoController extends Controller
             ->when($request->string('estado')->toString(), fn (Builder $q, string $estado) => $q->where('estado', $estado))
             ->when($request->has('activo'), fn (Builder $q) => $q->where('activo', $request->boolean('activo')));
 
-        return $this->paginated($query->orderBy('codigo')->paginate($this->perPage()));
+        $page = $query->orderBy('codigo')->paginate($this->perPage());
+        $page->getCollection()->each(function (Vehiculo $vehiculo) {
+            $vehiculo->ultimo_horometro_valido ??= $vehiculo->horometro_base;
+            $vehiculo->tiene_horometro_base = $vehiculo->ultimo_horometro_valido !== null;
+        });
+
+        return $this->paginated($page);
     }
 
     public function show(Vehiculo $vehiculo): array
@@ -317,7 +328,7 @@ class VehiculoController extends Controller
     }
 
     /**
-     * @param array<string, mixed> $data
+     * @param  array<string, mixed>  $data
      * @return array<string, mixed>
      */
     private function vehiclePayload(array $data): array
@@ -347,7 +358,7 @@ class VehiculoController extends Controller
     }
 
     /**
-     * @param Collection<int, Sede> $sedes
+     * @param  Collection<int, Sede>  $sedes
      */
     private function resolveSede(Collection $sedes, string $value): Sede
     {

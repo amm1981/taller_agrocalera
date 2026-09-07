@@ -19,6 +19,7 @@ class HorometroRegistro extends Model
     ];
 
     protected $fillable = [
+        'client_reference',
         'vehiculo_id',
         'fecha',
         'operario_id',

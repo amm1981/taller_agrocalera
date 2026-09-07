@@ -14,6 +14,7 @@ export type User = {
   name: string
   last_name: string | null
   dni: string | null
+  username: string
   email: string
   status: 'ACTIVO' | 'INACTIVO'
   roles?: Role[]
@@ -30,6 +31,7 @@ export type UserPayload = {
   name: string
   last_name: string | null
   dni: string | null
+  username: string
   email: string
   password?: string | null
   status: 'ACTIVO' | 'INACTIVO'

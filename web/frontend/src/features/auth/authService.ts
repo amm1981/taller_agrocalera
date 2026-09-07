@@ -2,7 +2,7 @@ import { api } from '../../api/http'
 import type { AuthPayload, LoginResponse } from './types'
 
 type LoginInput = {
-  email: string
+  usuario: string
   password: string
   device_name?: string
 }

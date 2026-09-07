@@ -9,7 +9,7 @@ import { Button } from '../components/ui/button'
 import { useAuth } from '../features/auth/AuthContext'
 
 const loginSchema = z.object({
-  email: z.string().email('Ingresa un correo válido'),
+  usuario: z.string().min(1, 'Ingresa tu usuario'),
   password: z.string().min(1, 'Ingresa tu contraseña'),
 })
 
@@ -36,7 +36,7 @@ export function LoginPage() {
   } = useForm<LoginValues>({
     resolver: zodResolver(loginSchema),
     defaultValues: {
-      email: '',
+      usuario: '',
       password: '',
     },
   })
@@ -84,15 +84,15 @@ export function LoginPage() {
 
           <div className="space-y-4">
             <label className="block">
-              <span className="text-sm font-medium text-slate-700">Correo</span>
+              <span className="text-sm font-medium text-slate-700">Usuario</span>
               <input
                 className="mt-1 h-11 w-full rounded-md border border-slate-200 px-3 text-sm outline-none transition focus:border-emerald-700 focus:ring-2 focus:ring-emerald-100"
-                type="email"
-                autoComplete="email"
-                {...register('email')}
+                type="text"
+                autoComplete="username"
+                {...register('usuario')}
               />
-              {errors.email ? (
-                <span className="mt-1 block text-sm text-rose-700">{errors.email.message}</span>
+              {errors.usuario ? (
+                <span className="mt-1 block text-sm text-rose-700">{errors.usuario.message}</span>
               ) : null}
             </label>
 

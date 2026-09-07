@@ -17,7 +17,7 @@ class AuthApiTest extends TestCase
         $this->seed(DatabaseSeeder::class);
 
         $response = $this->postJson('/api/auth/login', [
-            'email' => 'admin@agrocontrol.local',
+            'usuario' => 'admin',
             'password' => 'admin123',
             'device_name' => 'feature-test',
         ]);
@@ -25,6 +25,7 @@ class AuthApiTest extends TestCase
         $response
             ->assertOk()
             ->assertJsonPath('token_type', 'Bearer')
+            ->assertJsonPath('user.username', 'admin')
             ->assertJsonPath('user.email', 'admin@agrocontrol.local')
             ->assertJsonPath('roles.0', 'ADMINISTRADOR')
             ->assertJsonFragment(['usuarios.permisos']);
@@ -38,13 +39,25 @@ class AuthApiTest extends TestCase
         $this->seed(DatabaseSeeder::class);
 
         $response = $this->postJson('/api/auth/login', [
-            'email' => 'admin@agrocontrol.local',
+            'usuario' => 'admin',
             'password' => 'wrong-password',
         ]);
 
         $response
             ->assertStatus(422)
             ->assertJsonPath('code', 'INVALID_CREDENTIALS');
+    }
+
+    public function test_user_can_still_login_with_email_for_compatibility(): void
+    {
+        $this->seed(DatabaseSeeder::class);
+
+        $this->postJson('/api/auth/login', [
+            'email' => 'admin@agrocontrol.local',
+            'password' => 'admin123',
+        ])
+            ->assertOk()
+            ->assertJsonPath('user.username', 'admin');
     }
 
     public function test_authenticated_user_can_get_profile_roles_and_permissions(): void

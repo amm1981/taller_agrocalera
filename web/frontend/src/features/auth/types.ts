@@ -3,6 +3,7 @@ export type AuthUser = {
   name: string
   last_name: string | null
   dni: string | null
+  username: string | null
   email: string
   status: 'ACTIVO' | 'INACTIVO'
   last_login_at: string | null

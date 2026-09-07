@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import { useEffect, useState } from 'react'
-import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom'
+import { Link, NavLink, useLocation } from 'react-router-dom'
 import {
   Bell,
   Building2,
@@ -68,7 +68,6 @@ export function AppLayout({
 }: AppLayoutProps) {
   const { session, logout } = useAuth()
   const location = useLocation()
-  const navigate = useNavigate()
   const [sidebarExpanded, setSidebarExpanded] = useState(true)
   const [openMenu, setOpenMenu] = useState<string | null>(null)
   const initials = (session?.user.name ?? 'Juan Andrade')
@@ -144,11 +143,11 @@ export function AppLayout({
                       isActive ? 'bg-white/20 font-black' : 'font-bold hover:bg-white/10',
                     )}
                     onClick={() => {
-                      setOpenMenu((current) => (current === item.label ? null : item.label))
-
-                      if (!isActive) {
-                        navigate(item.to)
+                      if (!sidebarExpanded) {
+                        setSidebarExpanded(true)
                       }
+
+                      setOpenMenu((current) => (current === item.label ? null : item.label))
                     }}
                     aria-expanded={sidebarExpanded ? isOpen : undefined}
                     title={sidebarExpanded ? undefined : item.label}

@@ -24,6 +24,7 @@ class UserController extends Controller
                         ->where('name', 'like', "%{$search}%")
                         ->orWhere('last_name', 'like', "%{$search}%")
                         ->orWhere('dni', 'like', "%{$search}%")
+                        ->orWhere('username', 'like', "%{$search}%")
                         ->orWhere('email', 'like', "%{$search}%");
                 });
             })
@@ -83,6 +84,7 @@ class UserController extends Controller
             'name' => ['required', 'string', 'max:120'],
             'last_name' => ['nullable', 'string', 'max:120'],
             'dni' => ['nullable', 'string', 'max:20', Rule::unique('users', 'dni')->ignore($ignoreId)],
+            'username' => ['required', 'string', 'max:80', Rule::unique('users', 'username')->ignore($ignoreId)],
             'email' => ['required', 'email', 'max:160', Rule::unique('users', 'email')->ignore($ignoreId)],
             'password' => [$updating ? 'nullable' : 'required', 'string', 'min:8', 'max:120'],
             'status' => ['required', Rule::in(['ACTIVO', 'INACTIVO'])],

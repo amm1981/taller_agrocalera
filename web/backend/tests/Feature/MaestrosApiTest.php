@@ -164,6 +164,7 @@ class MaestrosApiTest extends TestCase
                 'name' => 'Rosa',
                 'last_name' => 'Campos',
                 'dni' => '76543210',
+                'username' => 'rosa.campos',
                 'email' => 'rosa.campos@agrocontrol.local',
                 'password' => 'admin123',
                 'status' => 'ACTIVO',

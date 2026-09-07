@@ -34,6 +34,7 @@ function emptyUser(roles: Role[]): UserPayload {
     name: '',
     last_name: '',
     dni: '',
+    username: '',
     email: '',
     password: '',
     status: 'ACTIVO',
@@ -57,6 +58,7 @@ export function UsuariosPage() {
     name: '',
     last_name: '',
     dni: '',
+    username: '',
     email: '',
     password: '',
     status: 'ACTIVO',
@@ -105,6 +107,7 @@ export function UsuariosPage() {
         name: selectedUser.name,
         last_name: selectedUser.last_name ?? '',
         dni: selectedUser.dni ?? '',
+        username: selectedUser.username,
         email: selectedUser.email,
         password: '',
         status: selectedUser.status,
@@ -201,7 +204,7 @@ export function UsuariosPage() {
                         <div className="flex h-11 w-11 items-center justify-center rounded-full bg-emerald-50 text-sm font-black text-emerald-800">{initials(user)}</div>
                         <div>
                           <div className="font-black text-slate-950">{user.name} {user.last_name}</div>
-                          <div className="text-xs font-medium text-slate-500">{user.email}</div>
+                          <div className="text-xs font-medium text-slate-500">@{user.username}</div>
                         </div>
                       </div>
                     </td>
@@ -236,6 +239,9 @@ export function UsuariosPage() {
               </FilterField>
               <FilterField label="DNI">
                 <input className={inputClass} value={userForm.dni ?? ''} onChange={(event) => setUserForm((current) => ({ ...current, dni: event.target.value }))} />
+              </FilterField>
+              <FilterField label="Usuario">
+                <input required className={inputClass} value={userForm.username} onChange={(event) => setUserForm((current) => ({ ...current, username: event.target.value }))} />
               </FilterField>
               <FilterField label="Email">
                 <input required className={inputClass} type="email" value={userForm.email} onChange={(event) => setUserForm((current) => ({ ...current, email: event.target.value }))} />

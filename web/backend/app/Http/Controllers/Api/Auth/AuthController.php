@@ -14,14 +14,18 @@ class AuthController extends Controller
     public function login(LoginRequest $request): JsonResponse
     {
         $credentials = $request->validated();
+        $identifier = $credentials['usuario'] ?? $credentials['email'];
 
-        $user = User::where('email', $credentials['email'])->first();
+        $user = User::query()
+            ->where('username', $identifier)
+            ->orWhere('email', $identifier)
+            ->first();
 
         if (! $user || ! Hash::check($credentials['password'], $user->password)) {
             return response()->json([
                 'message' => 'Las credenciales no son válidas.',
                 'errors' => [
-                    'email' => ['Correo o contraseña incorrectos.'],
+                    'usuario' => ['Usuario o contraseña incorrectos.'],
                 ],
                 'code' => 'INVALID_CREDENTIALS',
             ], 422);

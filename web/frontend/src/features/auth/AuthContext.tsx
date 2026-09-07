@@ -13,7 +13,7 @@ import { getMe, login, logout } from './authService'
 import type { AuthPayload } from './types'
 
 type LoginValues = {
-  email: string
+  usuario: string
   password: string
 }
 

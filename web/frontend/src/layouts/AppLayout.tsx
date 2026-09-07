@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { Link, NavLink, useLocation } from 'react-router-dom'
 import {
   Bell,
@@ -76,24 +76,6 @@ export function AppLayout({
     .slice(0, 2)
     .join('')
 
-  useEffect(() => {
-    if (!openMenu) {
-      return
-    }
-
-    if (!sidebarExpanded) {
-      setOpenMenu(null)
-      return
-    }
-
-    const currentParent = navigation.find((item) => item.label === openMenu)
-    const currentPath = currentParent?.to.split('?')[0]
-
-    if (!currentParent?.children || !currentPath || !location.pathname.startsWith(currentPath)) {
-      setOpenMenu(null)
-    }
-  }, [location.pathname, openMenu, sidebarExpanded])
-
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
       <aside
@@ -113,7 +95,15 @@ export function AppLayout({
           <button
             type="button"
             className="grid h-10 w-10 shrink-0 place-items-center rounded-lg text-[#edebdd] transition hover:bg-white/10"
-            onClick={() => setSidebarExpanded((current) => !current)}
+            onClick={() => {
+              setSidebarExpanded((current) => {
+                if (current) {
+                  setOpenMenu(null)
+                }
+
+                return !current
+              })
+            }}
             aria-label={sidebarExpanded ? 'Contraer menú lateral' : 'Expandir menú lateral'}
             title={sidebarExpanded ? 'Contraer menú' : 'Expandir menú'}
           >

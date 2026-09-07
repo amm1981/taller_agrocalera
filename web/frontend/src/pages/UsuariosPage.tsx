@@ -1,10 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Check, Filter, MoreVertical, Save, Search, ShieldCheck, UserRoundCheck, Users } from 'lucide-react'
+import { Check, Filter, Pencil, Save, Search, ShieldCheck, UserRoundCheck, Users, X } from 'lucide-react'
+import type { Dispatch, SetStateAction } from 'react'
 import { useEffect, useMemo, useState } from 'react'
 import { Button } from '../components/ui/button'
 import { MetricCard } from '../components/common/MetricCard'
 import { FilterField, inputClass } from '../features/taller/components/FilterField'
 import { StatusBadge } from '../features/taller/components/StatusBadge'
+import type { PaginatedResponse } from '../types/api'
 import {
   createUsuario,
   getPermisos,
@@ -15,7 +17,6 @@ import {
 } from '../features/usuarios/usuariosService'
 import type { Permission, Role, User, UserFilters, UserPayload } from '../features/usuarios/types'
 import { AppLayout } from '../layouts/AppLayout'
-import { cn } from '../utils/cn'
 
 const permissionGroups = [
   { label: 'Taller', prefix: 'taller.' },
@@ -49,10 +50,18 @@ function groupPermissions(permissions: Permission[]) {
   }))
 }
 
+function matchesUserFilters(user: User, filters: UserFilters) {
+  const search = filters.q?.trim().toLowerCase()
+  const userText = `${user.name} ${user.last_name ?? ''} ${user.dni ?? ''} ${user.username} ${user.email}`.toLowerCase()
+
+  return (!filters.status || user.status === filters.status) && (!search || userText.includes(search))
+}
+
 export function UsuariosPage() {
   const queryClient = useQueryClient()
   const [filters, setFilters] = useState<UserFilters>({ per_page: 50 })
-  const [selectedUser, setSelectedUser] = useState<User | null>(null)
+  const [editingUser, setEditingUser] = useState<User | null>(null)
+  const [isUserModalOpen, setIsUserModalOpen] = useState(false)
   const [selectedRole, setSelectedRole] = useState<Role | null>(null)
   const [userForm, setUserForm] = useState<UserPayload>({
     name: '',
@@ -95,28 +104,26 @@ export function UsuariosPage() {
     setRolePermissions(selectedRole?.permissions?.map((permission) => permission.name) ?? [])
   }, [selectedRole])
 
-  useEffect(() => {
-    if (!selectedUser && usuarios.data?.data.length) {
-      setSelectedUser(usuarios.data.data[0])
-    }
-  }, [selectedUser, usuarios.data?.data])
+  const openNewUser = () => {
+    setEditingUser(null)
+    setUserForm(emptyUser(roles.data ?? []))
+    setIsUserModalOpen(true)
+  }
 
-  useEffect(() => {
-    if (selectedUser) {
-      setUserForm({
-        name: selectedUser.name,
-        last_name: selectedUser.last_name ?? '',
-        dni: selectedUser.dni ?? '',
-        username: selectedUser.username,
-        email: selectedUser.email,
-        password: '',
-        status: selectedUser.status,
-        roles: selectedUser.roles?.map((role) => role.name) ?? [],
-      })
-    } else {
-      setUserForm(emptyUser(roles.data ?? []))
-    }
-  }, [roles.data, selectedUser])
+  const openEditUser = (user: User) => {
+    setEditingUser(user)
+    setUserForm({
+      name: user.name,
+      last_name: user.last_name ?? '',
+      dni: user.dni ?? '',
+      username: user.username,
+      email: user.email,
+      password: '',
+      status: user.status,
+      roles: user.roles?.map((role) => role.name) ?? [],
+    })
+    setIsUserModalOpen(true)
+  }
 
   const saveUser = useMutation({
     mutationFn: () => {
@@ -127,15 +134,37 @@ export function UsuariosPage() {
         password: userForm.password || null,
       }
 
-      if (selectedUser) {
-        return updateUsuario(selectedUser.id, payload)
+      if (editingUser) {
+        return updateUsuario(editingUser.id, payload)
       }
 
       return createUsuario(payload)
     },
-    onSuccess: async (user) => {
-      setSelectedUser(user)
-      await queryClient.invalidateQueries({ queryKey: ['usuarios'] })
+    onSuccess: (user) => {
+      queryClient.setQueryData<PaginatedResponse<User>>(['usuarios', filters], (current) => {
+        if (!current) {
+          return current
+        }
+
+        const exists = current.data.some((item) => item.id === user.id)
+        const matchesFilters = matchesUserFilters(user, filters)
+        const nextData = exists
+          ? current.data.map((item) => (item.id === user.id ? user : item)).filter((item) => matchesUserFilters(item, filters))
+          : matchesFilters
+            ? [user, ...current.data].slice(0, current.meta.per_page)
+            : current.data
+
+        return {
+          ...current,
+          data: nextData,
+          meta: {
+            ...current.meta,
+            total: exists && !matchesFilters ? Math.max(current.meta.total - 1, 0) : !exists && matchesFilters ? current.meta.total + 1 : current.meta.total,
+          },
+        }
+      })
+      setIsUserModalOpen(false)
+      setEditingUser(null)
     },
   })
 
@@ -180,7 +209,7 @@ export function UsuariosPage() {
               <option value="ACTIVO">Activo</option>
               <option value="INACTIVO">Inactivo</option>
             </select>
-            <Button variant="secondary" onClick={() => setSelectedUser(null)}>
+            <Button variant="secondary" onClick={openNewUser}>
               Nuevo usuario
             </Button>
           </div>
@@ -193,12 +222,12 @@ export function UsuariosPage() {
                   <th className="border-b border-slate-100 px-5 py-4">Rol</th>
                   <th className="border-b border-slate-100 px-5 py-4">Módulo</th>
                   <th className="border-b border-slate-100 px-5 py-4">Estado</th>
-                  <th className="border-b border-slate-100 px-5 py-4">Acción</th>
+                  <th className="border-b border-slate-100 px-5 py-4">Acciones</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {(usuarios.data?.data ?? []).map((user) => (
-                  <tr key={user.id} className={cn('cursor-pointer hover:bg-emerald-50/25', selectedUser?.id === user.id ? 'bg-emerald-50/40' : '')} onClick={() => setSelectedUser(user)}>
+                  <tr key={user.id} className="hover:bg-emerald-50/25">
                     <td className="px-5 py-4">
                       <div className="flex items-center gap-3">
                         <div className="flex h-11 w-11 items-center justify-center rounded-full bg-emerald-50 text-sm font-black text-emerald-800">{initials(user)}</div>
@@ -214,7 +243,17 @@ export function UsuariosPage() {
                     </td>
                     <td className="px-5 py-4 text-slate-700">{moduleLabel(user.roles?.[0]?.name)}</td>
                     <td className="px-5 py-4"><StatusBadge value={user.status} /></td>
-                    <td className="px-5 py-4"><MoreVertical className="h-5 w-5 text-slate-500" aria-hidden="true" /></td>
+                    <td className="px-5 py-4">
+                      <button
+                        type="button"
+                        onClick={() => openEditUser(user)}
+                        className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-700 transition-colors hover:border-emerald-200 hover:bg-emerald-50 hover:text-emerald-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-700"
+                        title="Editar usuario"
+                        aria-label={`Editar usuario ${user.username}`}
+                      >
+                        <Pencil className="h-4 w-4" aria-hidden="true" />
+                      </button>
+                    </td>
                   </tr>
                 ))}
                 {!usuarios.isLoading && !usuarios.data?.data.length ? (
@@ -228,48 +267,6 @@ export function UsuariosPage() {
         </section>
 
         <aside className="grid gap-5">
-          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-[0_12px_30px_rgba(15,23,42,0.05)]">
-            <h2 className="mb-4 text-lg font-black text-slate-950">{selectedUser ? 'Editar usuario' : 'Nuevo usuario'}</h2>
-            <form className="grid gap-3" onSubmit={(event) => { event.preventDefault(); saveUser.mutate() }}>
-              <FilterField label="Nombre">
-                <input required className={inputClass} value={userForm.name} onChange={(event) => setUserForm((current) => ({ ...current, name: event.target.value }))} />
-              </FilterField>
-              <FilterField label="Apellido">
-                <input className={inputClass} value={userForm.last_name ?? ''} onChange={(event) => setUserForm((current) => ({ ...current, last_name: event.target.value }))} />
-              </FilterField>
-              <FilterField label="DNI">
-                <input className={inputClass} value={userForm.dni ?? ''} onChange={(event) => setUserForm((current) => ({ ...current, dni: event.target.value }))} />
-              </FilterField>
-              <FilterField label="Usuario">
-                <input required className={inputClass} value={userForm.username} onChange={(event) => setUserForm((current) => ({ ...current, username: event.target.value }))} />
-              </FilterField>
-              <FilterField label="Email">
-                <input required className={inputClass} type="email" value={userForm.email} onChange={(event) => setUserForm((current) => ({ ...current, email: event.target.value }))} />
-              </FilterField>
-              <FilterField label="Contraseña">
-                <input required={!selectedUser} className={inputClass} type="password" value={userForm.password ?? ''} onChange={(event) => setUserForm((current) => ({ ...current, password: event.target.value }))} placeholder={selectedUser ? 'Dejar vacío para conservar' : ''} />
-              </FilterField>
-              <FilterField label="Rol">
-                <select className={inputClass} value={userForm.roles[0] ?? ''} onChange={(event) => setUserForm((current) => ({ ...current, roles: event.target.value ? [event.target.value] : [] }))}>
-                  <option value="">Sin rol</option>
-                  {(roles.data ?? []).map((role) => (
-                    <option key={role.id} value={role.name}>{role.name}</option>
-                  ))}
-                </select>
-              </FilterField>
-              <FilterField label="Estado">
-                <select className={inputClass} value={userForm.status} onChange={(event) => setUserForm((current) => ({ ...current, status: event.target.value as UserPayload['status'] }))}>
-                  <option value="ACTIVO">Activo</option>
-                  <option value="INACTIVO">Inactivo</option>
-                </select>
-              </FilterField>
-              <Button type="submit" disabled={saveUser.isPending}>
-                <Save className="h-4 w-4" aria-hidden="true" />
-                Guardar usuario
-              </Button>
-            </form>
-          </section>
-
           <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-[0_12px_30px_rgba(15,23,42,0.05)]">
             <div className="mb-4 flex items-center gap-2">
               <ShieldCheck className="h-5 w-5 text-slate-700" aria-hidden="true" />
@@ -320,7 +317,112 @@ export function UsuariosPage() {
           </section>
         </aside>
       </div>
+
+      {isUserModalOpen ? (
+        <UserFormModal
+          user={editingUser}
+          userForm={userForm}
+          roles={roles.data ?? []}
+          loading={saveUser.isPending}
+          onClose={() => {
+            setIsUserModalOpen(false)
+            setEditingUser(null)
+          }}
+          onChange={setUserForm}
+          onSubmit={() => saveUser.mutate()}
+        />
+      ) : null}
     </AppLayout>
+  )
+}
+
+function UserFormModal({
+  user,
+  userForm,
+  roles,
+  loading,
+  onClose,
+  onChange,
+  onSubmit,
+}: {
+  user: User | null
+  userForm: UserPayload
+  roles: Role[]
+  loading: boolean
+  onClose: () => void
+  onChange: Dispatch<SetStateAction<UserPayload>>
+  onSubmit: () => void
+}) {
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/45 p-4 backdrop-blur-sm">
+      <section className="max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-xl bg-white shadow-2xl">
+        <div className="flex items-start justify-between border-b border-slate-100 px-5 py-4">
+          <div>
+            <h2 className="text-lg font-black text-slate-950">{user ? 'Editar usuario' : 'Nuevo usuario'}</h2>
+            <p className="text-sm font-medium text-slate-500">Mantén roles y estado según los permisos actuales.</p>
+          </div>
+          <button className="grid h-9 w-9 place-items-center rounded-lg text-slate-500 hover:bg-slate-100" type="button" onClick={onClose} aria-label="Cerrar formulario">
+            <X className="h-5 w-5" aria-hidden="true" />
+          </button>
+        </div>
+
+        <form
+          className="grid gap-4 p-5 md:grid-cols-2"
+          onSubmit={(event) => {
+            event.preventDefault()
+            onSubmit()
+          }}
+        >
+          <FilterField label="Nombre">
+            <input required className={inputClass} value={userForm.name} onChange={(event) => onChange((current) => ({ ...current, name: event.target.value }))} />
+          </FilterField>
+          <FilterField label="Apellido">
+            <input className={inputClass} value={userForm.last_name ?? ''} onChange={(event) => onChange((current) => ({ ...current, last_name: event.target.value }))} />
+          </FilterField>
+          <FilterField label="DNI">
+            <input className={inputClass} value={userForm.dni ?? ''} onChange={(event) => onChange((current) => ({ ...current, dni: event.target.value }))} />
+          </FilterField>
+          <FilterField label="Usuario">
+            <input required className={inputClass} value={userForm.username} onChange={(event) => onChange((current) => ({ ...current, username: event.target.value }))} />
+          </FilterField>
+          <FilterField label="Email">
+            <input required className={inputClass} type="email" value={userForm.email} onChange={(event) => onChange((current) => ({ ...current, email: event.target.value }))} />
+          </FilterField>
+          <FilterField label="Contraseña">
+            <input
+              required={!user}
+              className={inputClass}
+              type="password"
+              value={userForm.password ?? ''}
+              onChange={(event) => onChange((current) => ({ ...current, password: event.target.value }))}
+              placeholder={user ? 'Dejar vacío para conservar' : ''}
+            />
+          </FilterField>
+          <FilterField label="Rol">
+            <select className={inputClass} value={userForm.roles[0] ?? ''} onChange={(event) => onChange((current) => ({ ...current, roles: event.target.value ? [event.target.value] : [] }))}>
+              <option value="">Sin rol</option>
+              {roles.map((role) => (
+                <option key={role.id} value={role.name}>{role.name}</option>
+              ))}
+            </select>
+          </FilterField>
+          <FilterField label="Estado">
+            <select className={inputClass} value={userForm.status} onChange={(event) => onChange((current) => ({ ...current, status: event.target.value as UserPayload['status'] }))}>
+              <option value="ACTIVO">Activo</option>
+              <option value="INACTIVO">Inactivo</option>
+            </select>
+          </FilterField>
+
+          <div className="flex justify-end gap-3 border-t border-slate-100 pt-4 md:col-span-2">
+            <Button variant="secondary" onClick={onClose}>Cancelar</Button>
+            <Button type="submit" disabled={loading}>
+              <Save className="h-4 w-4" aria-hidden="true" />
+              Guardar usuario
+            </Button>
+          </div>
+        </form>
+      </section>
+    </div>
   )
 }
 

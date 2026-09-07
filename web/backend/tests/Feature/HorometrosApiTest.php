@@ -15,6 +15,7 @@ use Database\Seeders\DatabaseSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
+use ZipArchive;
 
 class HorometrosApiTest extends TestCase
 {
@@ -358,6 +359,35 @@ class HorometrosApiTest extends TestCase
             ->getJson('/api/horometros/reportes?fecha_desde=2026-08-26&fecha_hasta=2026-08-26')
             ->assertOk()
             ->assertJsonPath('data.horas_totales', 3);
+    }
+
+    public function test_records_export_generates_xlsx_with_active_filters(): void
+    {
+        $this->seed(DatabaseSeeder::class);
+        $matching = $this->registroEnJornada('2026-08-26', 700);
+        $matching->update(['estado' => 'OBSERVADO', 'observacion' => 'Revision operativa']);
+        $this->registroEnJornada('2026-08-27', 800);
+
+        $response = $this
+            ->withToken($this->adminToken())
+            ->get('/api/horometros/registros/export?estado=OBSERVADO');
+
+        $response->assertOk();
+        $response->assertHeader('content-type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+
+        $path = tempnam(sys_get_temp_dir(), 'hor_export_');
+        file_put_contents($path, $response->streamedContent());
+
+        $zip = new ZipArchive;
+        $this->assertTrue($zip->open($path));
+        $sheet = $zip->getFromName('xl/worksheets/sheet1.xml');
+        $zip->close();
+        unlink($path);
+
+        $this->assertIsString($sheet);
+        $this->assertStringContainsString('Revision operativa', $sheet);
+        $this->assertStringContainsString('OBSERVADO', $sheet);
+        $this->assertStringNotContainsString('800', $sheet);
     }
 
     public function test_user_without_horometros_permission_cannot_register_start(): void

@@ -123,8 +123,6 @@ import com.amm1981.horometro.ui.theme.HorometroTheme
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
-import com.google.mlkit.vision.text.TextRecognition
-import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import java.io.BufferedReader
 import java.io.File
 import java.io.OutputStreamWriter
@@ -154,7 +152,7 @@ enum class RegistrationType(
     val title: String,
     val subtitle: String,
 ) {
-    TRACTORS("Tractores", "Registro directo por operario"),
+    TRACTORS("Tractores", "Registro directo"),
     HEAVY("Maquinaria pesada", "Requiere login del responsable"),
 }
 
@@ -168,6 +166,9 @@ data class Vehicle(
     val loteId: Int?,
     val sedeName: String?,
     val loteName: String?,
+    val sedeId: Int? = null,
+    val lastValid: String? = null,
+    val referenceSynced: Boolean = false,
 )
 
 data class LocationOption(
@@ -320,6 +321,9 @@ class AgroControlApi(private val baseUrl: String) {
                 loteId = item.nullableInt("lote_id"),
                 sedeName = item.optJSONObject("sede")?.optString("nombre"),
                 loteName = item.optJSONObject("lote")?.optString("nombre"),
+                sedeId = item.nullableInt("sede_id"),
+                lastValid = item.nullableString("ultimo_horometro_valido"),
+                referenceSynced = item.has("ultimo_horometro_valido"),
             )
         }
     }
@@ -377,9 +381,7 @@ class AgroControlApi(private val baseUrl: String) {
     }
 
     suspend fun pendingRecords(token: String): List<HourmeterRecord> = withContext(Dispatchers.IO) {
-        val json = request("GET", "/horometros/pendientes?per_page=50", token = token)
-
-        json.getJSONArray("data").mapJsonObjects(::recordFromJson)
+        requestAll("/horometros/pendientes", token).mapJsonObjects(::recordFromJson)
     }
 
     suspend fun configuration(token: String): HourmeterConfig = withContext(Dispatchers.IO) {
@@ -394,11 +396,11 @@ class AgroControlApi(private val baseUrl: String) {
         onProgress(40)
         val newPending = pendingRecords(token)
         onProgress(55)
-        val newFundos = fundos(token)
+        val newFundos = emptyList<LocationOption>()
         onProgress(70)
-        val newSectores = sectores(token)
+        val newSectores = emptyList<LocationOption>()
         onProgress(82)
-        val newLotes = lotes(token)
+        val newLotes = emptyList<LocationOption>()
         onProgress(94)
         val newConfig = configuration(token)
         onProgress(100)
@@ -406,11 +408,12 @@ class AgroControlApi(private val baseUrl: String) {
         return FieldData(newVehicles, newOperators, newPending, newFundos, newSectores, newLotes, newConfig)
     }
 
-    suspend fun submitLocalRecord(token: String, local: LocalHourmeterRecord): LocalHourmeterRecord {
+    suspend fun submitLocalRecord(token: String, local: LocalHourmeterRecord, onStartSaved: (Int) -> Unit = {}): LocalHourmeterRecord {
         val startRecord = if (local.serverId == null) {
             registerStart(
                 token = token,
                 vehicleId = local.vehicleId,
+                clientReference = local.localId,
                 operatorId = local.operatorId,
                 fundoId = local.fundoId,
                 sectorId = local.sectorId,
@@ -435,6 +438,7 @@ class AgroControlApi(private val baseUrl: String) {
             )
         }
 
+        onStartSaved(startRecord.id)
         if (!local.finalConfirmed.isNullOrBlank()) {
             val closed = registerClose(
                 token = token,
@@ -455,6 +459,7 @@ class AgroControlApi(private val baseUrl: String) {
     suspend fun registerStart(
         token: String,
         vehicleId: Int,
+        clientReference: String? = null,
         operatorId: Int?,
         fundoId: Int?,
         sectorId: Int?,
@@ -470,6 +475,7 @@ class AgroControlApi(private val baseUrl: String) {
 
         val payload = JSONObject()
             .put("vehiculo_id", vehicleId)
+            .putNullable("client_reference", clientReference)
             .put("fecha", dateTime.substringBefore("T"))
             .put("horometro_inicial_confirmado", confirmed)
             .put("foto_inicial", photoReference)
@@ -704,9 +710,15 @@ private fun cachedFieldDataFromJson(json: JSONObject): CachedFieldData {
 }
 
 private fun saveLocalRecords(context: Context, records: List<LocalHourmeterRecord>) {
-    runCatching {
-        val payload = JSONArray().also { array -> records.forEach { array.put(it.toJson()) } }
-        File(context.filesDir, LOCAL_RECORDS_CACHE_FILE).writeText(payload.toString())
+    val payload = JSONArray().also { array -> records.forEach { array.put(it.toJson()) } }
+    val file = android.util.AtomicFile(File(context.filesDir, LOCAL_RECORDS_CACHE_FILE))
+    val stream = file.startWrite()
+    try {
+        stream.write(payload.toString().toByteArray(Charsets.UTF_8))
+        file.finishWrite(stream)
+    } catch (error: Exception) {
+        file.failWrite(stream)
+        throw error
     }
 }
 
@@ -729,6 +741,9 @@ private fun Vehicle.toJson(): JSONObject {
         .put("code", code)
         .put("name", name)
         .put("type_name", typeName)
+        .putNullable("sede_id", sedeId)
+        .putNullable("last_valid", lastValid)
+        .put("reference_synced", referenceSynced)
         .putNullable("fundo_id", fundoId)
         .putNullable("sector_id", sectorId)
         .putNullable("lote_id", loteId)
@@ -742,6 +757,9 @@ private fun vehicleFromCacheJson(json: JSONObject): Vehicle {
         code = json.optString("code"),
         name = json.optString("name"),
         typeName = json.optString("type_name"),
+        sedeId = json.nullableInt("sede_id"),
+        lastValid = json.nullableString("last_valid"),
+        referenceSynced = json.optBoolean("reference_synced", false),
         fundoId = json.nullableInt("fundo_id"),
         sectorId = json.nullableInt("sector_id"),
         loteId = json.nullableInt("lote_id"),
@@ -977,7 +995,11 @@ fun HorometroApp() {
             syncError = syncError,
             onSync = ::syncMasters,
             onTractors = {
-                selectedType = RegistrationType.TRACTORS
+                if (cachedData == null) {
+                    syncError = "Sincroniza los datos antes de registrar tractores."
+                } else {
+                    selectedType = RegistrationType.TRACTORS
+                }
             },
             onHeavy = {
                 selectedType = RegistrationType.HEAVY
@@ -992,7 +1014,7 @@ fun HorometroApp() {
 
         selectedType == RegistrationType.TRACTORS && cachedData != null -> FieldHomeScreen(
             api = api,
-            session = session ?: syncSession ?: AppSession(token = "", userName = "Registro directo", role = "OPERACION"),
+            session = AppSession(token = syncSession?.token.orEmpty(), userName = "Registro directo", role = "OPERACION"),
             registrationType = RegistrationType.TRACTORS,
             initialData = cachedData!!.data,
             onDataSynced = { data ->
@@ -1008,12 +1030,6 @@ fun HorometroApp() {
                 session = null
                 selectedType = null
             },
-        )
-
-        selectedType == RegistrationType.TRACTORS && session == null -> AutoLoginScreen(
-            onLogin = { api.login(DEFAULT_RESPONSIBLE_USER, DEFAULT_RESPONSIBLE_PASSWORD) },
-            onLoggedIn = { session = it },
-            onBack = { selectedType = null },
         )
 
         session != null && selectedType != null -> FieldHomeScreen(
@@ -1115,7 +1131,7 @@ fun VehicleTypeSelectionScreen(
             }
             VehicleOptionCard(
                 title = RegistrationType.TRACTORS.title,
-                subtitle = "Fundo, lote, tractor y operario",
+                subtitle = "Sede, tractor, operario y foto",
                 icon = Icons.Filled.Agriculture,
                 selected = selected == RegistrationType.TRACTORS,
                 onClick = { selected = RegistrationType.TRACTORS },
@@ -1225,8 +1241,8 @@ fun ResponsibleLoginScreen(
     onBack: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
-    var usuario by remember { mutableStateOf(DEFAULT_RESPONSIBLE_USER) }
-    var password by remember { mutableStateOf(DEFAULT_RESPONSIBLE_PASSWORD) }
+    var usuario by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
 
@@ -1373,9 +1389,6 @@ fun FieldHomeScreen(
     var vehicles by remember(initialData, registrationType) { mutableStateOf(initialData.vehicles.filter { it.matchesType(registrationType) }) }
     var operators by remember(initialData) { mutableStateOf(initialData.operators) }
     var pending by remember(initialData, registrationType) { mutableStateOf(initialData.pending.filter { it.vehicle?.matchesType(registrationType) == true }) }
-    var fundos by remember(initialData) { mutableStateOf(initialData.fundos) }
-    var sectores by remember(initialData) { mutableStateOf(initialData.sectores) }
-    var lotes by remember(initialData) { mutableStateOf(initialData.lotes) }
     var loading by remember { mutableStateOf(false) }
     var sendProgress by remember { mutableStateOf<Int?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -1383,12 +1396,12 @@ fun FieldHomeScreen(
     var localRecords by remember { mutableStateOf(loadLocalRecords(context)) }
 
     fun persistLocal(records: List<LocalHourmeterRecord>) {
-        localRecords = records
         saveLocalRecords(context, records)
+        localRecords = records
     }
 
     fun sendPendingLocal() {
-        val queue = localRecords.filter { it.status == "PENDIENTE_ENVIO" || it.status == "PENDIENTE_ENVIO_CIERRE" }
+        val queue = localRecords.filter { it.status == "PENDIENTE_ENVIO" || it.status == "PENDIENTE_ENVIO_CIERRE" }.sortedBy { it.startDateTime }
         if (queue.isEmpty()) {
             sendProgress = null
             return
@@ -1410,26 +1423,37 @@ fun FieldHomeScreen(
                         return@launch
                     }
             }
-            val updated = localRecords.toMutableList()
+            val blockedVehicles = mutableSetOf<Int>()
             queue.forEachIndexed { index, local ->
-                runCatching { api.submitLocalRecord(token, local) }
+                if (local.vehicleId in blockedVehicles) return@forEachIndexed
+                runCatching {
+                    api.submitLocalRecord(token, local) { serverId ->
+                        persistLocal(localRecords.map { if (it.localId == local.localId) it.copy(serverId = serverId) else it })
+                    }
+                }
                     .onSuccess { sent ->
-                        val position = updated.indexOfFirst { it.localId == local.localId }
-                        if (position >= 0) {
-                            updated[position] = sent
-                        }
+                        persistLocal(localRecords.map { current ->
+                            if (current.localId != local.localId) current
+                            else if (current.finalConfirmed != local.finalConfirmed) current.copy(serverId = sent.serverId)
+                            else sent
+                        })
                     }
                     .onFailure {
+                        blockedVehicles.add(local.vehicleId)
                         error = it.message ?: "No se pudieron enviar todos los pendientes."
                     }
                 sendProgress = (((index + 1).toFloat() / queue.size.toFloat()) * 100).toInt()
             }
-            persistLocal(updated)
             if (error == null) {
                 success = "Pendientes enviados correctamente."
-                pending = api.pendingRecords(token).filter { record -> record.vehicle?.matchesType(registrationType) == true }
+                runCatching { api.pendingRecords(token) }.onSuccess { records ->
+                    pending = records.filter { record -> record.vehicle?.matchesType(registrationType) == true }
+                }
             }
             sendProgress = null
+            if (error == null && localRecords.any { it.status == "PENDIENTE_ENVIO" || it.status == "PENDIENTE_ENVIO_CIERRE" }) {
+                sendPendingLocal()
+            }
         }
     }
 
@@ -1443,9 +1467,6 @@ fun FieldHomeScreen(
                 vehicles = data.vehicles.filter { it.matchesType(registrationType) }
                 operators = data.operators
                 pending = data.pending.filter { it.vehicle?.matchesType(registrationType) == true }
-                fundos = data.fundos
-                sectores = data.sectores
-                lotes = data.lotes
                 onDataSynced(data)
             }.onFailure {
                 error = it.message ?: "No se pudo cargar informacion."
@@ -1535,96 +1556,36 @@ fun FieldHomeScreen(
                 when (tab) {
                     FieldTab.Start -> StartScreen(
                         registrationType = registrationType,
-                        session = session,
                         vehicles = vehicles,
                         operators = operators,
-                        fundos = fundos,
-                        sectores = sectores,
-                        lotes = lotes,
+                        localRecords = localRecords,
+                        config = initialData.config,
                         onCancel = onBack,
                         onRegister = { vehicleId, operatorId, fundoId, sectorId, loteId, confirmed, ocr, manualCorrection, dateTime, photoPath ->
-                            loading = true
-                            error = null
-                            success = null
-                            scope.launch {
-                                runCatching {
-                                    api.registerStart(
-                                        token = session.token,
-                                        vehicleId = vehicleId,
-                                        operatorId = operatorId,
-                                        fundoId = fundoId,
-                                        sectorId = sectorId,
-                                        loteId = loteId,
-                                        confirmed = confirmed,
-                                        ocr = ocr,
-                                        manualCorrection = manualCorrection,
-                                        dateTime = dateTime,
-                                        photoReference = photoReference("inicio", vehicleId),
-                                        photoPath = photoPath,
-                                    )
-                                }.onSuccess { record ->
-                                    val vehicleLabel = vehicles.firstOrNull { it.id == vehicleId }?.let { "${it.code} - ${it.name}" } ?: "Vehiculo $vehicleId"
-                                    val operatorLabel = operators.firstOrNull { it.id == operatorId }?.let { "${it.dni} - ${it.fullName}" }
-                                    val local = LocalHourmeterRecord(
-                                        localId = "server-${record.id}",
-                                        serverId = record.id,
-                                        vehicleId = vehicleId,
-                                        vehicleLabel = vehicleLabel,
-                                        operatorId = operatorId,
-                                        operatorLabel = operatorLabel,
-                                        fundoId = fundoId,
-                                        sectorId = sectorId,
-                                        loteId = loteId,
-                                        initialConfirmed = confirmed,
-                                        initialOcr = ocr,
-                                        initialPhotoPath = photoPath,
-                                        startDateTime = dateTime,
-                                        manualCorrectionStart = manualCorrection,
-                                        finalConfirmed = null,
-                                        finalOcr = null,
-                                        finalPhotoPath = null,
-                                        finalDateTime = null,
-                                        status = "PENDIENTE_CIERRE",
-                                    )
-                                    persistLocal((localRecords.filterNot { it.serverId == record.id || it.localId == local.localId }) + local)
-                                    success = "Inicio registrado para ${record.vehicle?.code ?: "equipo"}."
-                                    tab = FieldTab.Close
-                                    pending = api.pendingRecords(session.token)
-                                        .filter { item -> item.vehicle?.matchesType(registrationType) == true }
-                                }.onFailure {
-                                    val local = LocalHourmeterRecord(
-                                        localId = "local-${System.currentTimeMillis()}",
-                                        serverId = null,
-                                        vehicleId = vehicleId,
-                                        vehicleLabel = vehicles.firstOrNull { it.id == vehicleId }?.let { "${it.code} - ${it.name}" } ?: "Vehiculo $vehicleId",
-                                        operatorId = operatorId,
-                                        operatorLabel = operators.firstOrNull { it.id == operatorId }?.let { "${it.dni} - ${it.fullName}" },
-                                        fundoId = fundoId,
-                                        sectorId = sectorId,
-                                        loteId = loteId,
-                                        initialConfirmed = confirmed,
-                                        initialOcr = ocr,
-                                        initialPhotoPath = photoPath,
-                                        startDateTime = dateTime,
-                                        manualCorrectionStart = manualCorrection,
-                                        finalConfirmed = null,
-                                        finalOcr = null,
-                                        finalPhotoPath = null,
-                                        finalDateTime = null,
-                                        status = "PENDIENTE_ENVIO",
-                                    )
-                                    persistLocal(localRecords + local)
-                                    success = "Registro guardado localmente. Se enviara automaticamente al recuperar Internet."
-                                    tab = FieldTab.Close
-                                }
-                                loading = false
-                            }
+                            val selectedOperator = operators.firstOrNull { it.id == operatorId }
+                            val local = LocalHourmeterRecord(
+                                localId = java.util.UUID.randomUUID().toString(), serverId = null,
+                                vehicleId = vehicleId,
+                                vehicleLabel = vehicles.firstOrNull { it.id == vehicleId }?.let { "${it.code} - ${it.name}" } ?: "Equipo $vehicleId",
+                                operatorId = operatorId,
+                                operatorLabel = selectedOperator?.let { "${it.dni} - ${it.fullName}" },
+                                fundoId = null, sectorId = null, loteId = null,
+                                initialConfirmed = confirmed, initialOcr = null,
+                                initialPhotoPath = photoPath, startDateTime = dateTime,
+                                manualCorrectionStart = false, finalConfirmed = null, finalOcr = null,
+                                finalPhotoPath = null, finalDateTime = null, status = "PENDIENTE_ENVIO",
+                            )
+                            persistLocal(localRecords + local)
+                            success = "Registro guardado."
+                            tab = FieldTab.Close
+                            sendPendingLocal()
                         },
                     )
 
                     FieldTab.Close -> CloseScreen(
                         pending = pending,
-                        localRecords = localRecords.filter { it.status == "PENDIENTE_ENVIO" || it.status == "PENDIENTE_CIERRE" || it.status == "PENDIENTE_ENVIO_CIERRE" },
+                        vehicles = vehicles,
+                        localRecords = localRecords,
                         onRefresh = { refresh() },
                         onSendPending = { sendPendingLocal() },
                         onCloseLocal = { localId, confirmed, ocr, dateTime, photoPath ->
@@ -1636,61 +1597,28 @@ fun FieldHomeScreen(
                                 }
                             })
                             success = "Cierre guardado localmente."
+                            sendPendingLocal()
                         },
                         onClose = { recordId, confirmed, ocr, dateTime, photoPath ->
-                            loading = true
-                            error = null
-                            success = null
-                            scope.launch {
-                                runCatching {
-                                    api.registerClose(
-                                        token = session.token,
-                                        recordId = recordId,
-                                        confirmed = confirmed,
-                                        ocr = ocr,
-                                        dateTime = dateTime,
-                                        photoReference = photoReference("cierre", recordId),
-                                        photoPath = photoPath,
-                                    )
-                                }.onSuccess { record ->
-                                    success = "Cierre registrado para ${record.vehicle?.code ?: "equipo"}."
-                                    persistLocal(localRecords.map {
-                                        if (it.serverId == record.id) {
-                                            it.copy(finalConfirmed = confirmed, finalOcr = ocr, finalPhotoPath = photoPath, finalDateTime = dateTime, status = "CERRADO")
-                                        } else {
-                                            it
-                                        }
-                                    })
-                                    pending = api.pendingRecords(session.token)
-                                        .filter { item -> item.vehicle?.matchesType(registrationType) == true }
-                                }.onFailure {
-                                    val pendingRecord = pending.firstOrNull { item -> item.id == recordId }
-                                    val local = LocalHourmeterRecord(
-                                        localId = "server-$recordId",
-                                        serverId = recordId,
-                                        vehicleId = pendingRecord?.vehicle?.id ?: 0,
-                                        vehicleLabel = pendingRecord?.vehicle?.let { vehicle -> "${vehicle.code} - ${vehicle.name}" } ?: "Equipo $recordId",
-                                        operatorId = pendingRecord?.operator?.id,
-                                        operatorLabel = pendingRecord?.operator?.let { operator -> "${operator.dni} - ${operator.fullName}" },
-                                        fundoId = pendingRecord?.vehicle?.fundoId,
-                                        sectorId = pendingRecord?.vehicle?.sectorId,
-                                        loteId = pendingRecord?.vehicle?.loteId,
-                                        initialConfirmed = pendingRecord?.initial ?: "-",
-                                        initialOcr = null,
-                                        initialPhotoPath = null,
-                                        startDateTime = pendingRecord?.date?.let { date -> "${date}T07:00" } ?: currentDateTime(),
-                                        manualCorrectionStart = false,
-                                        finalConfirmed = confirmed,
-                                        finalOcr = ocr,
-                                        finalPhotoPath = photoPath,
-                                        finalDateTime = dateTime,
-                                        status = "PENDIENTE_ENVIO_CIERRE",
-                                    )
-                                    persistLocal((localRecords.filterNot { record -> record.localId == local.localId || record.serverId == recordId }) + local)
-                                    success = "Cierre guardado localmente. Se enviara automaticamente al recuperar Internet."
-                                }
-                                loading = false
-                            }
+                            val remote = pending.firstOrNull { it.id == recordId }
+                            val existing = localRecords.firstOrNull { it.serverId == recordId }
+                            val local = existing?.copy(
+                                finalConfirmed = confirmed, finalOcr = null, finalPhotoPath = photoPath,
+                                finalDateTime = dateTime, status = "PENDIENTE_ENVIO_CIERRE",
+                            ) ?: LocalHourmeterRecord(
+                                localId = "server-$recordId", serverId = recordId,
+                                vehicleId = remote?.vehicle?.id ?: 0,
+                                vehicleLabel = remote?.vehicle?.code ?: "Equipo $recordId",
+                                operatorId = remote?.operator?.id, operatorLabel = remote?.operator?.fullName,
+                                fundoId = null, sectorId = null, loteId = null,
+                                initialConfirmed = remote?.initial ?: "0", initialOcr = null,
+                                initialPhotoPath = null, startDateTime = remote?.date ?: dateTime,
+                                manualCorrectionStart = false, finalConfirmed = confirmed, finalOcr = null,
+                                finalPhotoPath = photoPath, finalDateTime = dateTime, status = "PENDIENTE_ENVIO_CIERRE",
+                            )
+                            persistLocal(localRecords.filterNot { it.serverId == recordId } + local)
+                            success = "Cierre guardado."
+                            sendPendingLocal()
                         },
                     )
 
@@ -1731,6 +1659,12 @@ fun ConnectivityWatcher(
             val callback = object : ConnectivityManager.NetworkCallback() {
                 override fun onAvailable(network: Network) {
                     scope.launch { currentOnAvailable() }
+                }
+
+                override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+                    if (capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) {
+                        scope.launch { currentOnAvailable() }
+                    }
                 }
             }
 
@@ -1966,296 +1900,120 @@ fun StepProgress(current: Int, total: Int) {
 @Composable
 fun StartScreen(
     registrationType: RegistrationType,
-    session: AppSession,
     vehicles: List<Vehicle>,
     operators: List<Operator>,
-    fundos: List<LocationOption>,
-    sectores: List<LocationOption>,
-    lotes: List<LocationOption>,
+    localRecords: List<LocalHourmeterRecord>,
+    config: HourmeterConfig,
     onCancel: () -> Unit,
     onRegister: (Int, Int?, Int?, Int?, Int?, String, String?, Boolean, String, String?) -> Unit,
 ) {
-    var fundoId by remember { mutableStateOf<Int?>(null) }
-    var loteId by remember { mutableStateOf<Int?>(null) }
+    var sedeId by remember { mutableStateOf<Int?>(null) }
     var vehicleId by remember { mutableStateOf<Int?>(null) }
     var operatorId by remember { mutableStateOf<Int?>(null) }
-    var draft by remember { mutableStateOf<HourmeterCaptureDraft?>(null) }
+    var reading by remember { mutableStateOf("") }
+    var photo by remember { mutableStateOf<String?>(null) }
     var showCamera by remember { mutableStateOf(false) }
-    var showQrScanner by remember { mutableStateOf(false) }
-    var qrMessage by remember { mutableStateOf<String?>(null) }
-
-    val tractorFlow = registrationType == RegistrationType.TRACTORS
-    val filteredLotes = remember(fundoId, sectores, lotes) {
-        if (fundoId == null) {
-            emptyList()
-        } else {
-            val sectorIds = sectores
-                .filter { it.parentId == fundoId }
-                .map { it.id }
-                .toSet()
-
-            lotes.filter { it.parentId in sectorIds }
-        }
+    var showQr by remember { mutableStateOf(false) }
+    var message by remember { mutableStateOf<String?>(null) }
+    val sedes = remember(vehicles) {
+        vehicles.filter { it.sedeId != null }.distinctBy { it.sedeId }
+            .map { LocationOption(it.sedeId!!, "", it.sedeName ?: "Sede ${it.sedeId}") }
+            .sortedBy { it.name }
     }
-    val filteredVehicles = remember(tractorFlow, loteId, vehicles) {
-        if (!tractorFlow) {
-            vehicles
-        } else if (loteId == null) {
-            emptyList()
-        } else {
-            vehicles
-        }
-    }
-
-    LaunchedEffect(fundoId) {
-        loteId = null
-        vehicleId = null
-        operatorId = null
-    }
-
-    LaunchedEffect(loteId) {
-        vehicleId = null
-        operatorId = null
-    }
-
-    LaunchedEffect(filteredVehicles) {
-        if (vehicleId == null || filteredVehicles.none { it.id == vehicleId }) {
-            vehicleId = if (tractorFlow) null else filteredVehicles.firstOrNull()?.id
-        }
-    }
-
-    val selectedVehicle = vehicles.firstOrNull { it.id == vehicleId }
+    val filtered = remember(vehicles, sedeId) { vehicles.filter { sedeId != null && it.sedeId == sedeId } }
+    val selected = filtered.firstOrNull { it.id == vehicleId }
     val selectedOperator = operators.firstOrNull { it.id == operatorId }
-    val selectedSectorId = lotes.firstOrNull { it.id == loteId }?.parentId
+    val localValues = localRecords.filter { it.vehicleId == vehicleId }
+        .mapNotNull { (it.finalConfirmed ?: it.initialConfirmed).toBigDecimalOrNull() }
+    val reference = (localValues + listOfNotNull(selected?.lastValid?.toBigDecimalOrNull())).maxOrNull()?.toPlainString()
+    val validation = readingError(reading, reference, true, config.startToleranceHours)
     val vehicleLabel = if (registrationType == RegistrationType.TRACTORS) "Tractor" else "Vehiculo"
-    val requiresOperator = registrationType == RegistrationType.TRACTORS
-    val canCapture = if (tractorFlow) {
-        fundoId != null && loteId != null && vehicleId != null && operatorId != null
-    } else {
-        vehicleId != null
-    }
-    val captureHint = when {
-        tractorFlow && fundoId == null -> "Selecciona el fundo."
-        tractorFlow && loteId == null -> "Selecciona el lote."
-        vehicleId == null -> "Selecciona el ${vehicleLabel.lowercase()}."
-        requiresOperator && operatorId == null -> "Selecciona el operario."
-        else -> "Listo para capturar la foto del horometro."
-    }
-
-    BackHandler {
-        when {
-            showCamera -> showCamera = false
-            showQrScanner -> showQrScanner = false
-            draft != null -> draft = null
-            else -> onCancel()
-        }
-    }
-
-    if (showCamera) {
-        CameraCaptureBottomSheet(
-            onBack = { showCamera = false },
-            onDetected = { detected, photoPath ->
-                draft = HourmeterCaptureDraft(
-                    vehicleId = vehicleId!!,
-                    operatorId = operatorId,
-                    vehicleLabel = selectedVehicle?.let { "${it.code} - ${it.name}" } ?: vehicleLabel,
-                    operatorLabel = selectedOperator?.let { "${it.dni} - ${it.fullName}" },
-                    photoPath = photoPath,
-                    detectedValue = detected,
-                    confirmedValue = detected,
-                    dateTime = currentDateTime(),
-                )
-                showCamera = false
+    BackHandler { onCancel() }
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(8.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        FormTitle("Registro inicial", registrationType.title, Icons.Filled.Speed)
+        SimpleDropdownField(
+            label = "Sede", placeholder = "Selecciona una sede",
+            selectedLabel = sedes.firstOrNull { it.id == sedeId }?.name,
+            items = sedes, icon = Icons.Filled.Map, itemLabel = { it.name },
+            onSelected = { sedeId = it.id; vehicleId = null; operatorId = null; reading = ""; photo = null },
+        )
+        SimpleDropdownField(
+            label = vehicleLabel, placeholder = "Selecciona un equipo",
+            selectedLabel = selected?.let { "${it.code} - ${it.name}" },
+            items = filtered, enabled = sedeId != null,
+            icon = Icons.Filled.Agriculture, itemLabel = { "${it.code} - ${it.name}" },
+            onSelected = { vehicleId = it.id; operatorId = null; reading = ""; photo = null; message = null },
+            trailingAction = {
+                IconButton(enabled = sedeId != null, onClick = { showQr = true }) {
+                    Icon(Icons.Filled.QrCodeScanner, contentDescription = "Escanear QR")
+                }
             },
         )
-    }
-
-    if (draft != null) {
-        ValidateHourmeterScreen(
-            draft = draft!!,
-            onRetake = { draft = null },
-            onSave = { confirmedValue, manualCorrection ->
-                onRegister(
-                    draft!!.vehicleId,
-                    draft!!.operatorId,
-                    fundoId,
-                    selectedSectorId,
-                    loteId,
-                    confirmedValue,
-                    draft!!.detectedValue,
-                    manualCorrection,
-                    draft!!.dateTime,
-                    draft!!.photoPath,
-                )
-                draft = null
-                operatorId = null
-            },
+        SimpleDropdownField(
+            label = "Operario",
+            placeholder = "Selecciona conductor",
+            selectedLabel = selectedOperator?.let { "${it.dni} - ${it.fullName}" },
+            items = operators,
+            enabled = selected != null,
+            icon = Icons.Filled.Badge,
+            itemLabel = { "${it.dni} - ${it.fullName}" },
+            onSelected = { operatorId = it.id },
+            emptyText = "No hay conductores sincronizados",
+            searchable = true,
         )
-        return
-    }
-
-    Scaffold(
-        containerColor = AppBackground,
-        bottomBar = {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(AppBackground)
-                    .navigationBarsPadding()
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                Text(captureHint, color = AppMuted, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall)
-                Button(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(52.dp),
-                    enabled = canCapture,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = AppGreen,
-                        disabledContainerColor = Color(0xFFE2E8F0),
-                        disabledContentColor = Color(0xFF94A3B8),
-                    ),
-                    shape = RoundedCornerShape(16.dp),
-                    onClick = {
-                        showCamera = true
-                    },
-                ) {
+        if (selected != null) {
+            if (!selected.referenceSynced) {
+                ErrorBox("Sincroniza los maestros para obtener la referencia del equipo.")
+            } else {
+                InfoLine(reference?.let { "Ultimo horometro valido: $it" } ?: "Sin base. Esta lectura sera la primera referencia.", compact = true)
+                AppTextField("Horometro", reading, { reading = it }, KeyboardType.Decimal)
+                if (reading.isNotBlank() && validation != null) ErrorBox(validation)
+                OutlinedButton(onClick = { showCamera = true }, enabled = validation == null, modifier = Modifier.fillMaxWidth()) {
                     Icon(Icons.Filled.CameraAlt, contentDescription = null)
                     Spacer(Modifier.width(8.dp))
-                    Text("Capturar horometro", fontWeight = FontWeight.Black, style = MaterialTheme.typography.titleMedium)
+                    Text(if (photo == null) "Tomar foto de evidencia" else "Repetir foto")
                 }
-                TextButton(
-                    modifier = Modifier.fillMaxWidth(),
-                    onClick = onCancel,
-                ) {
-                    Text("Cancelar", color = AppGreenDark, fontWeight = FontWeight.Black)
-                }
+                photo?.let { CapturedPhotoPreviewCard(it) }
             }
-        },
-    ) { formPadding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(formPadding)
-                .padding(horizontal = 16.dp)
-                .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(11.dp),
+        }
+        message?.let { ErrorBox(it) }
+        Button(
+            enabled = selected?.referenceSynced == true && operatorId != null && validation == null && photo != null,
+            modifier = Modifier.fillMaxWidth().height(50.dp),
+            onClick = {
+                onRegister(vehicleId!!, operatorId, null, null, null, reading.replace(',', '.'), null, false, currentDateTime(), photo)
+            },
         ) {
-            FormTitle(
-                title = "Registro inicial",
-                subtitle = if (tractorFlow) "Completa los datos de la jornada." else "Responsable: ${session.userName}",
-                icon = Icons.Filled.Speed,
-            )
-            StepProgress(
-                current = listOf(fundoId, loteId, vehicleId, operatorId).count { it != null }.coerceAtMost(if (tractorFlow) 4 else 1),
-                total = if (tractorFlow) 4 else 1,
-            )
-            if (qrMessage != null) {
-                InfoLine(qrMessage!!, compact = true)
-            }
-
-            if (tractorFlow) {
-                SimpleDropdownField(
-                    label = "Fundo",
-                    placeholder = "Selecciona un fundo",
-                    selectedLabel = fundos.firstOrNull { it.id == fundoId }?.label(),
-                    items = fundos,
-                    icon = Icons.Filled.Map,
-                    itemLabel = { it.label() },
-                    onSelected = { fundoId = it.id },
-                )
-                SimpleDropdownField(
-                    label = "Lote",
-                    placeholder = "Selecciona un lote",
-                    selectedLabel = lotes.firstOrNull { it.id == loteId }?.label(),
-                    items = filteredLotes,
-                    enabled = fundoId != null,
-                    emptyText = if (fundoId == null) "Primero selecciona un fundo" else "No hay lotes para este fundo",
-                    icon = Icons.Filled.Map,
-                    itemLabel = { it.label() },
-                    onSelected = { loteId = it.id },
-                )
-                SimpleDropdownField(
-                    label = "Tractor",
-                    placeholder = "Selecciona un tractor",
-                    selectedLabel = selectedVehicle?.let { "${it.code} - ${it.name}" },
-                    items = filteredVehicles,
-                    enabled = loteId != null,
-                    emptyText = if (loteId == null) "Primero selecciona un lote" else "No hay tractores activos",
-                    icon = Icons.Filled.Agriculture,
-                    itemLabel = { "${it.code} - ${it.name}" },
-                    onSelected = {
-                        vehicleId = it.id
-                        qrMessage = null
-                    },
-                    trailingAction = {
-                        IconButton(
-                            modifier = Modifier
-                                .size(54.dp)
-                                .clip(RoundedCornerShape(16.dp))
-                                .background(if (loteId != null) AppGreenSoft else Color(0xFFF3F6F5)),
-                            enabled = loteId != null,
-                            onClick = {
-                                qrMessage = null
-                                showQrScanner = true
-                            },
-                        ) {
-                            Icon(
-                                Icons.Filled.QrCodeScanner,
-                                contentDescription = "Escanear QR",
-                                tint = if (loteId != null) AppGreenDark else Color(0xFFCBD5E1),
-                            )
-                        }
-                    },
-                )
-                SimpleDropdownField(
-                    label = "Operario",
-                    placeholder = "Selecciona nombre y DNI",
-                    selectedLabel = selectedOperator?.let { "${it.dni} - ${it.fullName}" },
-                    items = operators,
-                    enabled = vehicleId != null,
-                    emptyText = if (vehicleId == null) "Primero selecciona un tractor" else "No hay operarios activos",
-                    icon = Icons.Filled.Badge,
-                    itemLabel = { "${it.dni} - ${it.fullName}" },
-                    onSelected = { operatorId = it.id },
-                )
-            } else {
-                SimpleDropdownField(
-                    label = "Vehiculo",
-                    placeholder = "Selecciona un vehiculo",
-                    selectedLabel = selectedVehicle?.let { "${it.code} - ${it.name}" },
-                    items = filteredVehicles,
-                    emptyText = "No hay vehiculos de maquinaria pesada",
-                    icon = Icons.Filled.Construction,
-                    itemLabel = { "${it.code} - ${it.name}" },
-                    onSelected = { vehicleId = it.id },
-                )
-            }
-
-            Spacer(Modifier.height(12.dp))
+            Icon(Icons.Filled.CheckCircle, contentDescription = null)
+            Spacer(Modifier.width(8.dp))
+            Text("Guardar registro")
         }
     }
-
-    if (showQrScanner) {
-        QrScannerBottomSheet(
-            onBack = { showQrScanner = false },
-            onCode = { code ->
-                val normalized = code.trim()
-                val found = filteredVehicles.firstOrNull { it.code.equals(normalized, ignoreCase = true) }
-
-                if (found == null) {
-                    qrMessage = "No se encontro el tractor con codigo $normalized."
-                    showQrScanner = false
-                } else {
-                    vehicleId = found.id
-                    qrMessage = "Tractor seleccionado: ${found.code} - ${found.name}."
-                    showQrScanner = false
-                }
-            },
-        )
-    }
+    if (showCamera) CameraCaptureBottomSheet(
+        onBack = { showCamera = false },
+        onDetected = { _, path -> photo = path; showCamera = false },
+    )
+    if (showQr) QrScannerBottomSheet(
+        onBack = { showQr = false },
+        onCode = { code ->
+            val found = filtered.firstOrNull { it.code.equals(code.trim(), true) }
+            vehicleId = found?.id
+            operatorId = null; reading = ""; photo = null
+            message = if (found == null) "No se encontro el tractor en la sede seleccionada." else null
+            showQr = false
+        },
+    )
 }
+
+private fun latestLocalReference(vehicleId: Int, initial: String, vehicles: List<Vehicle>, records: List<LocalHourmeterRecord>): String {
+    return (records.filter { it.vehicleId == vehicleId }.mapNotNull { (it.finalConfirmed ?: it.initialConfirmed).toBigDecimalOrNull() }
+        + listOfNotNull(initial.toBigDecimalOrNull(), vehicles.firstOrNull { it.id == vehicleId }?.lastValid?.toBigDecimalOrNull()))
+        .maxOrNull()?.toPlainString() ?: initial
+}
+
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -2292,6 +2050,7 @@ fun CameraCaptureContent(
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+    val captureScope = rememberCoroutineScope()
     val executor = remember(context) { ContextCompat.getMainExecutor(context) }
     var imageCapture by remember { mutableStateOf<ImageCapture?>(null) }
     var loading by remember { mutableStateOf(false) }
@@ -2411,19 +2170,17 @@ fun CameraCaptureContent(
                         executor,
                         object : ImageCapture.OnImageSavedCallback {
                             override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
-                                recognizeHourmeterFromFile(
-                                    context = context,
-                                    file = photoFile,
-                                    onSuccess = { detected ->
+                                captureScope.launch {
+                                    runCatching {
+                                        withContext(Dispatchers.IO) { compressEvidence(photoFile) }
+                                    }.onSuccess {
                                         loading = false
-                                        onDetected(detected, photoFile.absolutePath)
-                                    },
-                                    onError = { throwable ->
-                                        loading = false
-                                        error = throwable.message ?: "No se pudo leer el horometro."
                                         onDetected("", photoFile.absolutePath)
-                                    },
-                                )
+                                    }.onFailure {
+                                        loading = false
+                                        error = it.message ?: "No se pudo preparar la foto."
+                                    }
+                                }
                             }
 
                             override fun onError(exception: ImageCaptureException) {
@@ -2440,7 +2197,7 @@ fun CameraCaptureContent(
                 } else {
                     Icon(Icons.Filled.CameraAlt, contentDescription = null)
                     Spacer(Modifier.width(8.dp))
-                    Text("Leer con OCR", fontWeight = FontWeight.Black, style = MaterialTheme.typography.titleMedium)
+                    Text("Tomar foto", fontWeight = FontWeight.Black, style = MaterialTheme.typography.titleMedium)
                 }
             }
         }
@@ -2603,95 +2360,14 @@ fun QrScannerBottomSheet(
 }
 
 @Composable
-fun ValidateHourmeterScreen(
-    draft: HourmeterCaptureDraft,
-    onRetake: () -> Unit,
-    onSave: (String, Boolean) -> Unit,
-) {
-    var confirmed by remember(draft) { mutableStateOf(draft.confirmedValue) }
-    var manualCorrection by remember(draft) { mutableStateOf(false) }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(AppBackground)
-            .statusBarsPadding()
-            .navigationBarsPadding()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        SimpleTopBar(title = "Validacion", subtitle = "Confirma la lectura OCR", onBack = onRetake)
-        FormTitle("Validar horometro", "Revisa el valor detectado antes de guardar.", Icons.Filled.CheckCircle)
-        CapturedPhotoPreviewCard(draft.photoPath)
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            ReadingBox("Valor detectado por OCR", draft.detectedValue, Modifier.weight(1f))
-            Card(
-                modifier = Modifier.weight(1f),
-                shape = RoundedCornerShape(18.dp),
-                colors = CardDefaults.cardColors(containerColor = Color.White),
-            ) {
-                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Filled.Edit, contentDescription = null, tint = AppGreen, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text("Valor confirmado", color = AppGreenDark, fontWeight = FontWeight.Black)
-                    }
-                    AppTextField("Confirmado", confirmed, {
-                        confirmed = it
-                        manualCorrection = it != draft.detectedValue
-                    }, KeyboardType.Decimal)
-                }
-            }
-        }
-        ManualCorrectionCard(
-            enabled = manualCorrection,
-            onToggle = { manualCorrection = !manualCorrection },
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            ReadingBox("Fecha", displayDate(draft.dateTime), Modifier.weight(1f))
-            ReadingBox("Hora", displayTime(draft.dateTime), Modifier.weight(1f))
-        }
-        InfoLine("Equipo: ${draft.vehicleLabel}")
-        if (draft.operatorLabel != null) {
-            InfoLine("Operario: ${draft.operatorLabel}")
-        }
-        Button(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(52.dp),
-            enabled = confirmed.isNotBlank(),
-            colors = ButtonDefaults.buttonColors(containerColor = AppGreen),
-            shape = RoundedCornerShape(16.dp),
-            onClick = { onSave(confirmed, manualCorrection) },
-        ) {
-            Icon(Icons.Filled.CheckCircle, contentDescription = null)
-            Spacer(Modifier.width(8.dp))
-            Text("Guardar registro", fontWeight = FontWeight.Black, style = MaterialTheme.typography.titleMedium)
-        }
-        OutlinedButton(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(50.dp),
-            shape = RoundedCornerShape(16.dp),
-            border = BorderStroke(1.dp, AppGreen),
-            onClick = onRetake,
-        ) {
-            Icon(Icons.Filled.Refresh, contentDescription = null, tint = AppGreenDark)
-            Spacer(Modifier.width(8.dp))
-            Text("Volver a capturar", fontWeight = FontWeight.Black, color = AppGreenDark)
-        }
-    }
-}
-
-@Composable
 fun CloseCaptureReviewCard(
     draft: HourmeterCaptureDraft,
+    minimum: String,
     onRetake: () -> Unit,
     onSave: (String, String?, String, String) -> Unit,
 ) {
     var confirmed by remember(draft) { mutableStateOf(draft.confirmedValue) }
-    var manualCorrection by remember(draft) { mutableStateOf(false) }
+    val validation = readingError(confirmed, minimum, false)
 
     Card(
         shape = RoundedCornerShape(18.dp),
@@ -2701,16 +2377,13 @@ fun CloseCaptureReviewCard(
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             CapturedPhotoPreviewCard(draft.photoPath)
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                ReadingBox("OCR", draft.detectedValue, Modifier.weight(1f))
+                ReadingBox("Inicial", minimum, Modifier.weight(1f))
                 ReadingBox("Fecha/hora", displayDateTime(draft.dateTime), Modifier.weight(1f))
             }
             AppTextField("Valor confirmado", confirmed, {
                 confirmed = it
-                manualCorrection = it != draft.detectedValue
             }, KeyboardType.Decimal)
-            if (manualCorrection) {
-                InfoLine("Correccion manual aplicada al valor detectado por OCR.", compact = true)
-            }
+            if (validation != null) ErrorBox(validation)
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedButton(
                     modifier = Modifier
@@ -2726,10 +2399,10 @@ fun CloseCaptureReviewCard(
                     modifier = Modifier
                         .weight(1f)
                         .height(48.dp),
-                    enabled = confirmed.isNotBlank(),
+                    enabled = validation == null,
                     colors = ButtonDefaults.buttonColors(containerColor = AppGreen),
                     shape = RoundedCornerShape(16.dp),
-                    onClick = { onSave(confirmed, draft.detectedValue.ifBlank { null }, draft.dateTime, draft.photoPath) },
+                    onClick = { onSave(confirmed.replace(',', '.'), null, draft.dateTime, draft.photoPath) },
                 ) {
                     Text("Guardar cierre", fontWeight = FontWeight.Black)
                 }
@@ -2741,6 +2414,7 @@ fun CloseCaptureReviewCard(
 @Composable
 fun CloseScreen(
     pending: List<HourmeterRecord>,
+    vehicles: List<Vehicle>,
     localRecords: List<LocalHourmeterRecord>,
     onRefresh: () -> Unit,
     onSendPending: () -> Unit,
@@ -2748,11 +2422,9 @@ fun CloseScreen(
     onClose: (Int, String, String?, String, String) -> Unit,
 ) {
     val localPendingSend = localRecords.any { it.status == "PENDIENTE_ENVIO" || it.status == "PENDIENTE_ENVIO_CIERRE" }
-    val localPendingClose = localRecords.filter {
-        it.serverId == null && (it.status == "PENDIENTE_CIERRE" || it.status == "PENDIENTE_ENVIO")
-    }
+    val localPendingClose = localRecords.filter { it.finalConfirmed.isNullOrBlank() }
     val localServerIds = localRecords.mapNotNull { it.serverId }.toSet()
-    val remotePending = pending.filterNot { it.id in localServerIds && localRecords.any { local -> local.serverId == it.id && local.status == "CERRADO" } }
+    val remotePending = pending.filterNot { it.id in localServerIds }
 
     Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -2782,10 +2454,10 @@ fun CloseScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             lazyItems(localPendingClose, key = { it.localId }) { record ->
-                LocalPendingCard(record = record, onClose = onCloseLocal)
+                LocalPendingCard(record = record, minimum = latestLocalReference(record.vehicleId, record.initialConfirmed, vehicles, localRecords), onClose = onCloseLocal)
             }
             lazyItems(remotePending, key = { it.id }) { record ->
-                PendingCard(record = record, onClose = onClose)
+                PendingCard(record = record, minimum = latestLocalReference(record.vehicle?.id ?: 0, record.initial ?: "0", vehicles, localRecords), onClose = onClose)
             }
             if (remotePending.isEmpty() && localPendingClose.isEmpty()) {
                 item {
@@ -2812,9 +2484,11 @@ fun CloseScreen(
 @Composable
 fun LocalPendingCard(
     record: LocalHourmeterRecord,
+    minimum: String,
     onClose: (String, String, String?, String, String) -> Unit,
 ) {
     var draft by remember(record.localId) { mutableStateOf<HourmeterCaptureDraft?>(null) }
+    var reading by remember { mutableStateOf("") }
     var showCamera by remember(record.localId) { mutableStateOf(false) }
     val needsSend = record.status == "PENDIENTE_ENVIO" || record.status == "PENDIENTE_ENVIO_CIERRE"
     val canClose = record.finalConfirmed.isNullOrBlank()
@@ -2831,7 +2505,7 @@ fun LocalPendingCard(
                     operatorLabel = record.operatorLabel,
                     photoPath = photoPath,
                     detectedValue = detected,
-                    confirmedValue = detected,
+                    confirmedValue = reading,
                     dateTime = currentDateTime(),
                 )
                 showCamera = false
@@ -2871,7 +2545,10 @@ fun LocalPendingCard(
             }
             if (canClose) {
                 if (draft == null) {
+                    AppTextField("Horometro de cierre", reading, { reading = it }, KeyboardType.Decimal)
+                    if (reading.isNotBlank()) readingError(reading, minimum, false)?.let { ErrorBox(it) }
                     Button(
+                        enabled = readingError(reading, minimum, false) == null,
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(50.dp),
@@ -2886,6 +2563,7 @@ fun LocalPendingCard(
                 } else {
                     CloseCaptureReviewCard(
                         draft = draft!!,
+                        minimum = minimum,
                         onRetake = { draft = null },
                         onSave = { confirmed, ocr, dateTime, photoPath ->
                             onClose(record.localId, confirmed, ocr, dateTime, photoPath)
@@ -2903,9 +2581,11 @@ fun LocalPendingCard(
 @Composable
 fun PendingCard(
     record: HourmeterRecord,
+    minimum: String,
     onClose: (Int, String, String?, String, String) -> Unit,
 ) {
     var draft by remember(record.id) { mutableStateOf<HourmeterCaptureDraft?>(null) }
+    var reading by remember { mutableStateOf("") }
     var showCamera by remember(record.id) { mutableStateOf(false) }
 
     if (showCamera) {
@@ -2920,7 +2600,7 @@ fun PendingCard(
                     operatorLabel = record.operator?.let { "${it.dni} - ${it.fullName}" },
                     photoPath = photoPath,
                     detectedValue = detected,
-                    confirmedValue = detected,
+                    confirmedValue = reading,
                     dateTime = currentDateTime(),
                 )
                 showCamera = false
@@ -2957,7 +2637,10 @@ fun PendingCard(
                 ReadingBox("Horas", record.hours ?: "-", Modifier.weight(1f))
             }
             if (draft == null) {
+                AppTextField("Horometro de cierre", reading, { reading = it }, KeyboardType.Decimal)
+                if (reading.isNotBlank()) readingError(reading, minimum, false)?.let { ErrorBox(it) }
                 Button(
+                    enabled = readingError(reading, minimum, false) == null,
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(50.dp),
@@ -2972,6 +2655,7 @@ fun PendingCard(
             } else {
                 CloseCaptureReviewCard(
                     draft = draft!!,
+                    minimum = minimum,
                     onRetake = { draft = null },
                     onSave = { confirmed, ocr, dateTime, photoPath ->
                         onClose(record.id, confirmed, ocr, dateTime, photoPath)
@@ -3717,43 +3401,8 @@ private fun createEvidenceFile(root: File, kind: String): File {
     return File(directory, "$kind-$timestamp.jpg")
 }
 
-private fun recognizeHourmeterFromFile(
-    context: android.content.Context,
-    file: File,
-    onSuccess: (String) -> Unit,
-    onError: (Throwable) -> Unit,
-) {
-    val inputImage = try {
-        InputImage.fromFilePath(context, Uri.fromFile(file))
-    } catch (exception: Exception) {
-        onError(exception)
-        return
-    }
-    val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
-
-    recognizer
-        .process(inputImage)
-        .addOnSuccessListener { result ->
-            onSuccess(extractHourmeterValue(result.text))
-        }
-        .addOnFailureListener { exception ->
-            onError(exception)
-        }
-}
-
 private fun encodeFileAsBase64(path: String): String {
     return Base64.encodeToString(File(path).readBytes(), Base64.NO_WRAP)
-}
-
-private fun extractHourmeterValue(rawText: String): String {
-    val values = Regex("""\d{1,7}(?:[.,]\d{1,2})?""")
-        .findAll(rawText)
-        .map { it.value.replace(',', '.') }
-        .toList()
-
-    return values.firstOrNull { it.contains('.') }
-        ?: values.maxByOrNull { it.length }
-        ?: ""
 }
 
 @Preview(showBackground = true)
@@ -3761,5 +3410,43 @@ private fun extractHourmeterValue(rawText: String): String {
 fun HorometroPreview() {
     HorometroTheme {
         HorometroApp()
+    }
+}
+
+
+private fun compressEvidence(file: File) {
+    val orientation = android.media.ExifInterface(file.absolutePath)
+        .getAttributeInt(android.media.ExifInterface.TAG_ORIENTATION, 1)
+    val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    android.graphics.BitmapFactory.decodeFile(file.absolutePath, bounds)
+    val options = android.graphics.BitmapFactory.Options()
+    while (maxOf(bounds.outWidth, bounds.outHeight) / options.inSampleSize.coerceAtLeast(1) > 2560) {
+        options.inSampleSize = options.inSampleSize.coerceAtLeast(1) * 2
+    }
+    val bitmap = android.graphics.BitmapFactory.decodeFile(file.absolutePath, options)
+        ?: error("No se pudo procesar la foto.")
+    val matrix = android.graphics.Matrix().apply {
+        when (orientation) {
+            2 -> setScale(-1f, 1f)
+            3 -> setRotate(180f)
+            4 -> setScale(1f, -1f)
+            5 -> { setRotate(90f); postScale(-1f, 1f) }
+            6 -> setRotate(90f)
+            7 -> { setRotate(270f); postScale(-1f, 1f) }
+            8 -> setRotate(270f)
+        }
+    }
+    val oriented = android.graphics.Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+    val scale = minOf(1f, 1600f / maxOf(oriented.width, oriented.height))
+    val resized = android.graphics.Bitmap.createScaledBitmap(oriented, (oriented.width * scale).toInt(), (oriented.height * scale).toInt(), true)
+    val temporary = File(file.parentFile, "${file.name}.compressed")
+    try {
+        temporary.outputStream().use { check(resized.compress(android.graphics.Bitmap.CompressFormat.JPEG, 75, it)) }
+        java.nio.file.Files.move(temporary.toPath(), file.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+    } finally {
+        if (resized !== oriented) resized.recycle()
+        if (oriented !== bitmap) oriented.recycle()
+        bitmap.recycle()
+        temporary.delete()
     }
 }

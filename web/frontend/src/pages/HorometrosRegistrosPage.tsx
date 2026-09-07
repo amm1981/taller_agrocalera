@@ -1,5 +1,5 @@
-import { useQuery } from '@tanstack/react-query'
-import { Camera, Eye, RefreshCw, X } from 'lucide-react'
+import { useMutation, useQuery } from '@tanstack/react-query'
+import { Camera, Download, Eye, RefreshCw, X } from 'lucide-react'
 import { useState } from 'react'
 import { Button } from '../components/ui/button'
 import { getOperarios, getVehiculos } from '../features/maestros/masterDataService'
@@ -9,7 +9,7 @@ import {
   getSedesMaster,
   getTiposVehiculoMaster,
 } from '../features/maestros/maestrosService'
-import { getHorometroRegistros } from '../features/horometros/horometrosService'
+import { exportHorometroRegistros, getHorometroRegistros } from '../features/horometros/horometrosService'
 import type { HorometroFilters, HorometroRegistro } from '../features/horometros/types'
 import { StatusBadge } from '../features/taller/components/StatusBadge'
 import { FilterField, inputClass } from '../features/taller/components/FilterField'
@@ -33,6 +33,19 @@ export function HorometrosRegistrosPage() {
   const fundos = useQuery({ queryKey: ['maestros-fundos-lookup'], queryFn: getFundosMaster })
   const lotes = useQuery({ queryKey: ['maestros-lotes-lookup'], queryFn: getLotesMaster })
   const tiposVehiculo = useQuery({ queryKey: ['tipos-vehiculo'], queryFn: getTiposVehiculoMaster })
+  const exportMutation = useMutation({
+    mutationFn: () => exportHorometroRegistros(filters),
+    onSuccess: (blob) => {
+      const url = window.URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `horometros-registros-${new Date().toISOString().slice(0, 10)}.xlsx`
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      window.URL.revokeObjectURL(url)
+    },
+  })
 
   const updateFilter = (key: keyof HorometroFilters, value: string) => {
     setFilters((current) => ({ ...current, [key]: value || undefined, page: 1 }))
@@ -114,6 +127,14 @@ export function HorometrosRegistrosPage() {
             <Button className="flex-1" variant="secondary" onClick={() => setFilters({ per_page: 30 })}>Limpiar</Button>
             <Button variant="ghost" onClick={() => void registros.refetch()} disabled={registros.isFetching} aria-label="Actualizar registros">
               <RefreshCw className={`h-4 w-4 ${registros.isFetching ? 'animate-spin' : ''}`} aria-hidden="true" />
+            </Button>
+            <Button
+              className="bg-[#0e5631] text-white hover:bg-[#0b4729]"
+              onClick={() => exportMutation.mutate()}
+              disabled={exportMutation.isPending}
+            >
+              <Download className="h-4 w-4 text-white" aria-hidden="true" />
+              Exportar
             </Button>
           </div>
         </div>

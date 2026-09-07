@@ -9,6 +9,7 @@ use App\Models\HorometroConfiguracion;
 use App\Models\HorometroRegistro;
 use App\Models\Lote;
 use App\Models\Sector;
+use App\Support\SimpleXlsx;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
@@ -17,6 +18,7 @@ use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
+use Symfony\Component\HttpFoundation\BinaryFileResponse;
 
 class RegistroController extends Controller
 {
@@ -29,6 +31,73 @@ class RegistroController extends Controller
         $query = $this->baseQuery($request);
 
         return $this->paginated($query->latest('fecha')->paginate($this->perPage()));
+    }
+
+    public function export(Request $request): BinaryFileResponse
+    {
+        $headers = [
+            'ID',
+            'Fecha',
+            'Vehículo',
+            'Placa',
+            'Tipo vehículo',
+            'Sede',
+            'Fundo',
+            'Sector',
+            'Lote',
+            'Operario',
+            'DNI operario',
+            'Responsable',
+            'Horómetro inicial',
+            'Horómetro final',
+            'Horas trabajadas',
+            'Estado',
+            'Inicio',
+            'Cierre',
+            'Corrección manual',
+            'Foto inicial',
+            'Foto final',
+            'Observación',
+        ];
+
+        $rows = $this->baseQuery($request)
+            ->orderByDesc('fecha')
+            ->orderByDesc('id')
+            ->get()
+            ->map(fn (HorometroRegistro $registro): array => [
+                $registro->id,
+                $registro->fecha?->format('d/m/Y'),
+                $registro->vehiculo ? "{$registro->vehiculo->codigo} - {$registro->vehiculo->nombre}" : null,
+                $registro->vehiculo?->placa,
+                $registro->vehiculo?->tipoVehiculo?->nombre,
+                $registro->fundo?->sede?->nombre ?? $registro->vehiculo?->sede?->nombre,
+                $registro->fundo?->nombre,
+                $registro->sector?->nombre,
+                $registro->lote?->nombre,
+                trim(($registro->operario?->nombres ?? '').' '.($registro->operario?->apellidos ?? '')) ?: null,
+                $registro->operario?->dni,
+                trim(($registro->usuarioResponsable?->name ?? '').' '.($registro->usuarioResponsable?->last_name ?? '')) ?: null,
+                $registro->horometro_inicial_confirmado,
+                $registro->horometro_final_confirmado,
+                $registro->horas_trabajadas,
+                str_replace('_', ' ', $registro->estado),
+                $registro->fecha_hora_inicio?->format('d/m/Y H:i:s'),
+                $registro->fecha_hora_final?->format('d/m/Y H:i:s'),
+                ($registro->correccion_manual_inicio || $registro->correccion_manual_final) ? 'Sí' : 'No',
+                $registro->foto_inicial ? 'Sí' : 'No',
+                $registro->foto_final ? 'Sí' : 'No',
+                $registro->observacion,
+            ])
+            ->all();
+
+        $path = SimpleXlsx::createTemplate($headers, $rows, sheetName: 'Registros');
+        $fileName = 'horometros-registros-'.now()->format('Ymd-His').'.xlsx';
+
+        return response()->download(
+            $path,
+            $fileName,
+            ['Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
+        )->deleteFileAfterSend(true);
     }
 
     public function show(HorometroRegistro $registro): array
@@ -139,7 +208,7 @@ class RegistroController extends Controller
     private function baseQuery(Request $request): Builder
     {
         $query = HorometroRegistro::query()
-            ->with(['vehiculo.tipoVehiculo', 'operario', 'usuarioResponsable', 'fundo', 'sector', 'lote'])
+            ->with(['vehiculo.tipoVehiculo', 'vehiculo.sede', 'operario', 'usuarioResponsable', 'fundo.sede', 'sector', 'lote'])
             ->when($request->integer('vehiculo_id'), fn (Builder $q, int $vehiculoId) => $q->where('vehiculo_id', $vehiculoId))
             ->when($request->integer('operario_id'), fn (Builder $q, int $operarioId) => $q->where('operario_id', $operarioId))
             ->when($request->integer('usuario_responsable_id'), fn (Builder $q, int $usuarioId) => $q->where('usuario_responsable_id', $usuarioId))
@@ -173,7 +242,10 @@ class RegistroController extends Controller
             ->when($request->filled('fecha_hasta'), fn (Builder $q) => $q->whereDate('fecha', '<=', $request->input('fecha_hasta')));
 
         $query->when($request->integer('sede_id'), function (Builder $q, int $sedeId) {
-            $q->whereHas('fundo', fn (Builder $fundo) => $fundo->where('sede_id', $sedeId));
+            $q->where(function (Builder $query) use ($sedeId) {
+                $query->whereHas('fundo', fn (Builder $fundo) => $fundo->where('sede_id', $sedeId))
+                    ->orWhereHas('vehiculo', fn (Builder $vehiculo) => $vehiculo->where('sede_id', $sedeId));
+            });
         });
 
         return $query;

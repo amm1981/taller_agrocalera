@@ -32,8 +32,8 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        buildConfigField("String", "HOROMETRO_SYNC_USER", quotedBuildConfig("HOROMETRO_SYNC_USER", "admin"))
-        buildConfigField("String", "HOROMETRO_SYNC_PASSWORD", quotedBuildConfig("HOROMETRO_SYNC_PASSWORD", "admin123"))
+        buildConfigField("String", "HOROMETRO_SYNC_USER", quotedBuildConfig("HOROMETRO_SYNC_USER", ""))
+        buildConfigField("String", "HOROMETRO_SYNC_PASSWORD", quotedBuildConfig("HOROMETRO_SYNC_PASSWORD", ""))
     }
 
     buildTypes {
@@ -69,7 +69,6 @@ dependencies {
     implementation(libs.androidx.camera.camera2)
     implementation(libs.androidx.camera.lifecycle)
     implementation(libs.androidx.camera.view)
-    implementation(libs.mlkit.text.recognition)
     implementation(libs.mlkit.barcode.scanning)
     testImplementation(libs.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))

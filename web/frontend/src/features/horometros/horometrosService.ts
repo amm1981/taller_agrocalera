@@ -38,6 +38,15 @@ export async function getHorometroRegistros(filters?: HorometroFilters) {
   return data
 }
 
+export async function exportHorometroRegistros(filters?: HorometroFilters) {
+  const { data } = await api.get<Blob>('/horometros/registros/export', {
+    params: cleanParams({ ...filters, page: undefined, per_page: undefined }),
+    responseType: 'blob',
+  })
+
+  return data
+}
+
 export async function getHorometroPendientes(filters?: HorometroFilters) {
   const { data } = await api.get<PaginatedResponse<HorometroRegistro>>('/horometros/pendientes', {
     params: cleanParams(filters),

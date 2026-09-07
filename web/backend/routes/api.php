@@ -131,6 +131,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::middleware('permission:horometros.ver')->group(function () {
             Route::get('/dashboard', HorometrosDashboardController::class);
             Route::get('/registros', [HorometrosRegistroController::class, 'index']);
+            Route::get('/registros/export', [HorometrosRegistroController::class, 'export']);
             Route::get('/registros/{registro}', [HorometrosRegistroController::class, 'show']);
             Route::get('/pendientes', [HorometrosRegistroController::class, 'pendientes']);
             Route::get('/validaciones', [HorometrosRegistroController::class, 'validaciones']);

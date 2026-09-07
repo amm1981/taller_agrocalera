@@ -140,8 +140,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 private const val DEFAULT_API_URL = "https://taller.agrocalera.app/api"
-private const val DEFAULT_RESPONSIBLE_EMAIL = "admin@agrocontrol.local"
-private const val DEFAULT_RESPONSIBLE_PASSWORD = "admin123"
+private val DEFAULT_RESPONSIBLE_USER = BuildConfig.HOROMETRO_SYNC_USER
+private val DEFAULT_RESPONSIBLE_PASSWORD = BuildConfig.HOROMETRO_SYNC_PASSWORD
 private val AppBackground = Color(0xFFF6F8F7)
 private val AppGreen = Color(0xFF087A3D)
 private val AppGreenDark = Color(0xFF064E3B)
@@ -288,9 +288,9 @@ data class CachedFieldData(
 )
 
 class AgroControlApi(private val baseUrl: String) {
-    suspend fun login(email: String, password: String): AppSession = withContext(Dispatchers.IO) {
+    suspend fun login(usuario: String, password: String): AppSession = withContext(Dispatchers.IO) {
         val payload = JSONObject()
-            .put("email", email)
+            .put("usuario", usuario)
             .put("password", password)
             .put("device_name", "android-horometro")
 
@@ -949,7 +949,7 @@ fun HorometroApp() {
         syncError = null
         scope.launch {
             runCatching {
-                val syncSession = api.login(DEFAULT_RESPONSIBLE_EMAIL, DEFAULT_RESPONSIBLE_PASSWORD)
+                val syncSession = api.login(DEFAULT_RESPONSIBLE_USER, DEFAULT_RESPONSIBLE_PASSWORD)
                 syncProgress = 8
                 val data = api.fieldData(syncSession.token) { progress -> syncProgress = progress }
                 val cached = CachedFieldData(data = data, syncedAt = currentDateTime())
@@ -985,7 +985,7 @@ fun HorometroApp() {
         )
 
         selectedType == RegistrationType.HEAVY && session == null -> ResponsibleLoginScreen(
-            onLogin = { email, password -> api.login(email, password) },
+            onLogin = { usuario, password -> api.login(usuario, password) },
             onLoggedIn = { session = it },
             onBack = { selectedType = null },
         )
@@ -1011,7 +1011,7 @@ fun HorometroApp() {
         )
 
         selectedType == RegistrationType.TRACTORS && session == null -> AutoLoginScreen(
-            onLogin = { api.login(DEFAULT_RESPONSIBLE_EMAIL, DEFAULT_RESPONSIBLE_PASSWORD) },
+            onLogin = { api.login(DEFAULT_RESPONSIBLE_USER, DEFAULT_RESPONSIBLE_PASSWORD) },
             onLoggedIn = { session = it },
             onBack = { selectedType = null },
         )
@@ -1225,7 +1225,7 @@ fun ResponsibleLoginScreen(
     onBack: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
-    var email by remember { mutableStateOf(DEFAULT_RESPONSIBLE_EMAIL) }
+    var usuario by remember { mutableStateOf(DEFAULT_RESPONSIBLE_USER) }
     var password by remember { mutableStateOf(DEFAULT_RESPONSIBLE_PASSWORD) }
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -1260,7 +1260,7 @@ fun ResponsibleLoginScreen(
             ) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text("Usuario", fontWeight = FontWeight.Black, color = Color(0xFF064E3B))
-                    AppTextField("Ingresa tu usuario", email, { email = it }, keyboardType = KeyboardType.Email)
+                    AppTextField("Ingresa tu usuario", usuario, { usuario = it })
                     Text("Contrasena", fontWeight = FontWeight.Black, color = Color(0xFF064E3B))
                     AppTextField(
                         label = "Ingresa tu contrasena",
@@ -1283,7 +1283,7 @@ fun ResponsibleLoginScreen(
                             loading = true
                             error = null
                             scope.launch {
-                                runCatching { onLogin(email, password) }
+                                runCatching { onLogin(usuario, password) }
                                     .onSuccess(onLoggedIn)
                                     .onFailure { error = it.message ?: "No se pudo iniciar sesion." }
                                 loading = false
@@ -1403,7 +1403,7 @@ fun FieldHomeScreen(
             val token = if (session.token.isNotBlank()) {
                 session.token
             } else {
-                runCatching { api.login(DEFAULT_RESPONSIBLE_EMAIL, DEFAULT_RESPONSIBLE_PASSWORD).token }
+                runCatching { api.login(DEFAULT_RESPONSIBLE_USER, DEFAULT_RESPONSIBLE_PASSWORD).token }
                     .getOrElse {
                         error = it.message ?: "No se pudo iniciar sesion para enviar pendientes."
                         sendProgress = null

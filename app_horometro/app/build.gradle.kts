@@ -1,6 +1,21 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
+}
+
+val localProperties = Properties().also { properties ->
+    val localPropertiesFile = rootProject.file("local.properties")
+    if (localPropertiesFile.exists()) {
+        localPropertiesFile.inputStream().use(properties::load)
+    }
+}
+
+fun quotedBuildConfig(name: String, fallback: String): String {
+    val value = localProperties.getProperty(name)?.takeIf { it.isNotBlank() } ?: fallback
+
+    return "\"${value.replace("\\", "\\\\").replace("\"", "\\\"")}\""
 }
 
 android {
@@ -17,6 +32,8 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField("String", "HOROMETRO_SYNC_USER", quotedBuildConfig("HOROMETRO_SYNC_USER", "admin"))
+        buildConfigField("String", "HOROMETRO_SYNC_PASSWORD", quotedBuildConfig("HOROMETRO_SYNC_PASSWORD", "admin123"))
     }
 
     buildTypes {
@@ -32,6 +49,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 

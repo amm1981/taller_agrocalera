@@ -18,6 +18,7 @@ import {
   Tag,
   Trash2,
   UserRound,
+  Users,
   Wrench,
   X,
 } from 'lucide-react'
@@ -40,6 +41,7 @@ import {
   getMasterRecords,
   getSectoresMaster,
   getSedesMaster,
+  getTiposPersonalMaster,
   getTiposVehiculoMaster,
   getVehicleMeasurementPointHistory,
   importPersonalMasters,
@@ -84,6 +86,7 @@ type ExcelCell = string | number | boolean | Date | null
 const tabs: TabConfig[] = [
   { key: 'vehiculos', label: 'Vehículos', icon: CarFront, description: 'Equipos de la flota' },
   { key: 'personal', label: 'Personal', icon: UserRound, description: 'Operarios, técnicos y responsables' },
+  { key: 'tipos-personal', label: 'Tipos personal', icon: Users, description: 'Clasificación del personal' },
   { key: 'gerencias', label: 'Gerencias', icon: Building2, description: 'Áreas administrativas y campo' },
   { key: 'sedes', label: 'Sedes', icon: Factory, description: 'Ubicaciones principales' },
   { key: 'fundos', label: 'Fundos', icon: MapPinned, description: 'Fundos asociados a sedes' },
@@ -99,7 +102,6 @@ function parseMasterTab(value: string | null): MasterTabKey {
   return tabKeys.includes(value as MasterTabKey) ? value as MasterTabKey : 'vehiculos'
 }
 
-const personTypes = ['OPERARIO', 'TECNICO', 'RESPONSABLE', 'CONDUCTOR', 'OTRO']
 const activeStates = ['ACTIVO', 'INACTIVO']
 const vehicleImportColumns: Array<keyof VehicleImportRow> = [
   'codigo',
@@ -143,7 +145,7 @@ function emptyPayloadFor(tab: MasterTabKey): MasterPayload {
       dni: '',
       nombres: '',
       apellidos: '',
-      tipo: 'OPERARIO',
+      tipo: '',
       gerencia_id: '',
       sede_id: '',
       estado: 'ACTIVO',
@@ -161,6 +163,14 @@ function emptyPayloadFor(tab: MasterTabKey): MasterPayload {
 
   if (tab === 'tipos-falla') {
     return {
+      nombre: '',
+      estado: 'ACTIVO',
+    }
+  }
+
+  if (tab === 'tipos-personal') {
+    return {
+      codigo: '',
       nombre: '',
       estado: 'ACTIVO',
     }
@@ -187,6 +197,7 @@ function fieldsFor(tab: MasterTabKey, lookups: MasterLookups): FieldConfig[] {
   const sectorOptions = lookups.sectores.map((item) => ({ value: item.id, label: relationLabel(item) }))
   const fundoOptions = lookups.fundos.map((item) => ({ value: item.id, label: relationLabel(item) }))
   const tipoVehiculoOptions = lookups.tiposVehiculo.map((item) => ({ value: item.id, label: item.nombre }))
+  const tipoPersonalOptions = lookups.tiposPersonal.map((item) => ({ value: item.codigo ?? '', label: relationLabel(item) }))
   const estadoOptions = activeStates.map((state) => ({ value: state, label: state }))
 
   if (tab === 'vehiculos') {
@@ -209,7 +220,7 @@ function fieldsFor(tab: MasterTabKey, lookups: MasterLookups): FieldConfig[] {
       { name: 'dni', label: 'DNI', type: 'text', required: true },
       { name: 'nombres', label: 'Nombres', type: 'text', required: true },
       { name: 'apellidos', label: 'Apellidos', type: 'text', required: true },
-      { name: 'tipo', label: 'Tipo', type: 'select', required: true, options: personTypes.map((type) => ({ value: type, label: type })) },
+      { name: 'tipo', label: 'Tipo', type: 'select', required: true, options: tipoPersonalOptions },
       { name: 'gerencia_id', label: 'Gerencia', type: 'select', nullable: true, options: gerenciaOptions },
       { name: 'sede_id', label: 'Sede', type: 'select', nullable: true, options: sedeOptions },
       { name: 'estado', label: 'Estado', type: 'select', required: true, options: estadoOptions },
@@ -227,6 +238,14 @@ function fieldsFor(tab: MasterTabKey, lookups: MasterLookups): FieldConfig[] {
 
   if (tab === 'tipos-falla') {
     return [
+      { name: 'nombre', label: 'Nombre', type: 'text', required: true },
+      { name: 'estado', label: 'Estado', type: 'select', options: estadoOptions },
+    ]
+  }
+
+  if (tab === 'tipos-personal') {
+    return [
+      { name: 'codigo', label: 'Código', type: 'text', required: true },
       { name: 'nombre', label: 'Nombre', type: 'text', required: true },
       { name: 'estado', label: 'Estado', type: 'select', options: estadoOptions },
     ]
@@ -414,6 +433,7 @@ export function MaestrosPage() {
   const sectores = useQuery({ queryKey: ['maestros-sectores-lookup'], queryFn: getSectoresMaster })
   const lotes = useQuery({ queryKey: ['maestros-lotes-lookup'], queryFn: getLotesMaster })
   const tiposVehiculo = useQuery({ queryKey: ['maestros-tipos-vehiculo-lookup'], queryFn: getTiposVehiculoMaster })
+  const tiposPersonal = useQuery({ queryKey: ['maestros-tipos-personal-lookup'], queryFn: getTiposPersonalMaster })
 
   const lookups = useMemo<MasterLookups>(() => ({
     gerencias: gerencias.data ?? [],
@@ -422,7 +442,8 @@ export function MaestrosPage() {
     sectores: sectores.data ?? [],
     lotes: lotes.data ?? [],
     tiposVehiculo: tiposVehiculo.data ?? [],
-  }), [fundos.data, gerencias.data, lotes.data, sectores.data, sedes.data, tiposVehiculo.data])
+    tiposPersonal: tiposPersonal.data ?? [],
+  }), [fundos.data, gerencias.data, lotes.data, sectores.data, sedes.data, tiposPersonal.data, tiposVehiculo.data])
 
   const fields = useMemo(() => fieldsFor(activeTab, lookups), [activeTab, lookups])
   const active = tabs.find((tab) => tab.key === activeTab) ?? tabs[0]
@@ -470,6 +491,7 @@ export function MaestrosPage() {
       await queryClient.invalidateQueries({ queryKey: ['maestros-sectores-lookup'] })
       await queryClient.invalidateQueries({ queryKey: ['maestros-lotes-lookup'] })
       await queryClient.invalidateQueries({ queryKey: ['maestros-tipos-vehiculo-lookup'] })
+      await queryClient.invalidateQueries({ queryKey: ['maestros-tipos-personal-lookup'] })
       await queryClient.invalidateQueries({ queryKey: ['vehiculos'] })
       await queryClient.invalidateQueries({ queryKey: ['gerencias'] })
       await queryClient.invalidateQueries({ queryKey: ['tecnicos'] })
@@ -1306,6 +1328,10 @@ function headersFor(tab: MasterTabKey) {
 
   if (tab === 'tipos-vehiculo') {
     return ['Tipo vehículo', 'Horómetro', 'Login horómetro', 'Estado']
+  }
+
+  if (tab === 'tipos-personal') {
+    return ['Tipo personal', 'Estado']
   }
 
   return ['Registro', 'Estado']

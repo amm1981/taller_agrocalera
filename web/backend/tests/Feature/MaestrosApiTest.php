@@ -9,6 +9,7 @@ use App\Models\OrdenTrabajo;
 use App\Models\Personal;
 use App\Models\Sede;
 use App\Models\TipoFalla;
+use App\Models\TipoPersonal;
 use App\Models\TipoVehiculo;
 use App\Models\User;
 use App\Models\Vehiculo;
@@ -173,6 +174,58 @@ class MaestrosApiTest extends TestCase
             ->assertCreated()
             ->assertJsonMissing(['password' => 'admin123'])
             ->assertJsonPath('data.roles.0.name', 'TECNICO_TALLER');
+    }
+
+    public function test_admin_can_manage_personal_types_and_use_them_in_personal(): void
+    {
+        $this->seed(DatabaseSeeder::class);
+        $token = $this->adminToken();
+
+        $created = $this
+            ->withToken($token)
+            ->postJson('/api/tipos-personal', [
+                'codigo' => 'SUPERVISOR',
+                'nombre' => 'Supervisor',
+                'estado' => 'ACTIVO',
+            ])
+            ->assertCreated()
+            ->assertJsonPath('data.codigo', 'SUPERVISOR')
+            ->json('data');
+
+        $this
+            ->withToken($token)
+            ->putJson("/api/tipos-personal/{$created['id']}", [
+                'codigo' => 'SUPERVISOR',
+                'nombre' => 'Supervisor de Campo',
+                'estado' => 'ACTIVO',
+            ])
+            ->assertOk()
+            ->assertJsonPath('data.nombre', 'Supervisor de Campo');
+
+        $this
+            ->withToken($token)
+            ->getJson('/api/tipos-personal?q=supervisor')
+            ->assertOk()
+            ->assertJsonPath('data.0.codigo', 'SUPERVISOR');
+
+        $this
+            ->withToken($token)
+            ->postJson('/api/personal', [
+                'dni' => '45678901',
+                'nombres' => 'Carlos',
+                'apellidos' => 'Diaz',
+                'tipo' => 'SUPERVISOR',
+                'gerencia_id' => null,
+                'sede_id' => null,
+                'estado' => 'ACTIVO',
+            ])
+            ->assertCreated()
+            ->assertJsonPath('data.tipo', 'SUPERVISOR');
+
+        $this->assertDatabaseHas(TipoPersonal::class, [
+            'codigo' => 'SUPERVISOR',
+            'nombre' => 'Supervisor de Campo',
+        ]);
     }
 
     public function test_admin_can_bulk_import_vehicles_and_vehicle_types(): void

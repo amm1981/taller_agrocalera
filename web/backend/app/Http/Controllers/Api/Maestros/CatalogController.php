@@ -10,6 +10,7 @@ use App\Models\Lote;
 use App\Models\Sector;
 use App\Models\Sede;
 use App\Models\TipoFalla;
+use App\Models\TipoPersonal;
 use App\Models\TipoVehiculo;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
@@ -156,6 +157,21 @@ class CatalogController extends Controller
             'nombre' => ['required', 'string', 'max:120', Rule::unique('tipos_falla', 'nombre')->ignore($tipoFalla->id)],
             'estado' => ['nullable', Rule::in(['ACTIVO', 'INACTIVO'])],
         ]);
+    }
+
+    public function indexTiposPersonal(Request $request): array
+    {
+        return $this->indexSimple(TipoPersonal::query(), $request);
+    }
+
+    public function storeTipoPersonal(Request $request): JsonResponse
+    {
+        return $this->storeSimple(TipoPersonal::class, $request, $this->simpleRules('tipos_personal'));
+    }
+
+    public function updateTipoPersonal(Request $request, TipoPersonal $tipoPersonal): JsonResponse
+    {
+        return $this->updateSimple($tipoPersonal, $request, $this->simpleRules('tipos_personal', $tipoPersonal->id));
     }
 
     private function indexSimple(Builder $query, Request $request): array

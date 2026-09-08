@@ -6,6 +6,7 @@ use App\Models\Gerencia;
 use App\Models\MantenimientoPlan;
 use App\Models\Sede;
 use App\Models\TipoFalla;
+use App\Models\TipoPersonal;
 use App\Models\TipoVehiculo;
 use App\Models\Vehiculo;
 use Illuminate\Database\Seeder;
@@ -54,6 +55,19 @@ class InitialCatalogSeeder extends Seeder
             TipoFalla::updateOrCreate(
                 ['nombre' => $tipoFalla],
                 ['estado' => 'ACTIVO'],
+            );
+        }
+
+        foreach ([
+            ['codigo' => 'OPERARIO', 'nombre' => 'Operario'],
+            ['codigo' => 'RESPONSABLE', 'nombre' => 'Responsable'],
+            ['codigo' => 'TECNICO', 'nombre' => 'Tecnico'],
+            ['codigo' => 'CONDUCTOR', 'nombre' => 'Conductor'],
+            ['codigo' => 'OTRO', 'nombre' => 'Otro'],
+        ] as $tipoPersonal) {
+            TipoPersonal::updateOrCreate(
+                ['codigo' => $tipoPersonal['codigo']],
+                $tipoPersonal + ['estado' => 'ACTIVO'],
             );
         }
 

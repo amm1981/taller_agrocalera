@@ -12,6 +12,7 @@ export type MasterTabKey =
   | 'lotes'
   | 'tipos-vehiculo'
   | 'tipos-falla'
+  | 'tipos-personal'
 
 export type MasterFilters = {
   q?: string
@@ -56,6 +57,8 @@ export type TipoFalla = {
   nombre: string
   estado: MasterStatus
 }
+
+export type TipoPersonal = SimpleCatalog
 
 export type VehiculoMaster = {
   id: number
@@ -106,6 +109,7 @@ export type MasterRecord =
   | Lote
   | TipoVehiculo
   | TipoFalla
+  | TipoPersonal
 
 export type MasterPayload = Record<string, string | number | boolean | null>
 
@@ -116,6 +120,7 @@ export type MasterLookups = {
   sectores: Sector[]
   lotes: Lote[]
   tiposVehiculo: TipoVehiculo[]
+  tiposPersonal: TipoPersonal[]
 }
 
 export type VehicleImportRow = {

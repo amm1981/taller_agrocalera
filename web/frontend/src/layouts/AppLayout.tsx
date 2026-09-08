@@ -30,6 +30,7 @@ import { cn } from '../utils/cn'
 const masterNavigation = [
   { label: 'Vehículos', icon: CarFront, to: '/maestros?tab=vehiculos', tab: 'vehiculos' },
   { label: 'Personal', icon: UserRound, to: '/maestros?tab=personal', tab: 'personal' },
+  { label: 'Tipos personal', icon: Users, to: '/maestros?tab=tipos-personal', tab: 'tipos-personal' },
   { label: 'Gerencias', icon: Building2, to: '/maestros?tab=gerencias', tab: 'gerencias' },
   { label: 'Sedes', icon: Factory, to: '/maestros?tab=sedes', tab: 'sedes' },
   { label: 'Fundos', icon: MapPinned, to: '/maestros?tab=fundos', tab: 'fundos' },

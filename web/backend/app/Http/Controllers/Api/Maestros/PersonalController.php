@@ -7,6 +7,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Gerencia;
 use App\Models\Personal;
 use App\Models\Sede;
+use App\Models\TipoPersonal;
 use App\Support\SimpleXlsx;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
@@ -71,14 +72,20 @@ class PersonalController extends Controller
             ->map(fn (Sede $sede) => $this->catalogLabel($sede))
             ->values()
             ->all();
+        $tiposPersonal = TipoPersonal::query()
+            ->where('estado', 'ACTIVO')
+            ->orderBy('codigo')
+            ->pluck('codigo')
+            ->values()
+            ->all();
 
         $path = SimpleXlsx::createTemplate(
             ['dni', 'nombres', 'apellidos', 'tipo', 'gerencia', 'sede', 'estado'],
             [
-                ['87654321', 'Luis', 'Quispe', 'OPERARIO', $gerencias[0] ?? '', $sedes[0] ?? '', 'ACTIVO'],
+                ['87654321', 'Luis', 'Quispe', $tiposPersonal[0] ?? 'OPERARIO', $gerencias[0] ?? '', $sedes[0] ?? '', 'ACTIVO'],
             ],
             [
-                'tipo' => ['OPERARIO', 'TECNICO', 'RESPONSABLE', 'CONDUCTOR', 'OTRO'],
+                'tipo' => $tiposPersonal,
                 'gerencia' => $gerencias,
                 'sede' => $sedes,
                 'estado' => ['ACTIVO', 'INACTIVO'],
@@ -152,7 +159,7 @@ class PersonalController extends Controller
             'dni' => ['required', 'string', 'max:20', Rule::unique('personal', 'dni')->ignore($ignoreId)],
             'nombres' => ['required', 'string', 'max:120'],
             'apellidos' => ['required', 'string', 'max:120'],
-            'tipo' => ['required', Rule::in(['OPERARIO', 'TECNICO', 'RESPONSABLE', 'CONDUCTOR', 'OTRO'])],
+            'tipo' => ['required', 'string', Rule::exists('tipos_personal', 'codigo')->where('estado', 'ACTIVO')],
             'gerencia_id' => ['nullable', 'integer', Rule::exists('gerencias', 'id')],
             'sede_id' => ['nullable', 'integer', Rule::exists('sedes', 'id')],
             'estado' => ['required', Rule::in(['ACTIVO', 'INACTIVO'])],
@@ -163,7 +170,7 @@ class PersonalController extends Controller
     {
         $type = strtoupper(str($value)->squish()->replace(' ', '_')->toString());
 
-        if (! in_array($type, ['OPERARIO', 'TECNICO', 'RESPONSABLE', 'CONDUCTOR', 'OTRO'], true)) {
+        if (! TipoPersonal::query()->where('codigo', $type)->where('estado', 'ACTIVO')->exists()) {
             throw ValidationException::withMessages([
                 'rows' => ["Tipo de personal no válido: {$value}."],
             ]);

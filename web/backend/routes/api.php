@@ -45,6 +45,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/lotes', [CatalogController::class, 'indexLotes']);
         Route::get('/tipos-vehiculo', [CatalogController::class, 'indexTiposVehiculo']);
         Route::get('/tipos-falla', [CatalogController::class, 'indexTiposFalla']);
+        Route::get('/tipos-personal', [CatalogController::class, 'indexTiposPersonal']);
         Route::get('/vehiculos', [VehiculoController::class, 'index']);
         Route::get('/importaciones/vehiculos/plantilla', [VehiculoController::class, 'importTemplate']);
         Route::get('/vehiculos/{vehiculo}/trazabilidad', [VehiculoController::class, 'trazabilidad']);
@@ -64,6 +65,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/importaciones/personal', [PersonalController::class, 'bulkImport']);
         Route::post('/tipos-vehiculo', [CatalogController::class, 'storeTipoVehiculo']);
         Route::post('/tipos-falla', [CatalogController::class, 'storeTipoFalla']);
+        Route::post('/tipos-personal', [CatalogController::class, 'storeTipoPersonal']);
         Route::post('/vehiculos', [VehiculoController::class, 'store']);
         Route::post('/personal', [PersonalController::class, 'store']);
     });
@@ -76,6 +78,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::put('/lotes/{lote}', [CatalogController::class, 'updateLote']);
         Route::put('/tipos-vehiculo/{tipoVehiculo}', [CatalogController::class, 'updateTipoVehiculo']);
         Route::put('/tipos-falla/{tipoFalla}', [CatalogController::class, 'updateTipoFalla']);
+        Route::put('/tipos-personal/{tipoPersonal}', [CatalogController::class, 'updateTipoPersonal']);
         Route::put('/vehiculos/{vehiculo}', [VehiculoController::class, 'update']);
         Route::put('/personal/{personal}', [PersonalController::class, 'update']);
     });

@@ -14,6 +14,7 @@ import type {
   Sector,
   Sede,
   TipoFalla,
+  TipoPersonal,
   TipoVehiculo,
   VehicleImportRow,
   VehicleImportSummary,
@@ -146,6 +147,14 @@ export async function getTiposVehiculoMaster() {
   return data.data
 }
 
+export async function getTiposPersonalMaster() {
+  const { data } = await api.get<PaginatedResponse<TipoPersonal>>('/tipos-personal', {
+    params: { estado: 'ACTIVO', per_page: 100 },
+  })
+
+  return data.data
+}
+
 export async function getAllVehiclesMaster(): Promise<VehiculoMaster[]> {
   const { data } = await api.get<PaginatedResponse<VehiculoMaster>>('/vehiculos', {
     params: { per_page: 100, page: 1 },
@@ -182,3 +191,4 @@ export type MasterTypedRecord =
   | Lote
   | TipoVehiculo
   | TipoFalla
+  | TipoPersonal

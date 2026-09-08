@@ -76,6 +76,8 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::put('/personal/{personal}', [PersonalController::class, 'update']);
     });
 
+    Route::middleware('permission:maestros.editar')->delete('/vehiculos/{vehiculo}', [VehiculoController::class, 'destroy']);
+
     Route::middleware('permission:usuarios.ver')->group(function () {
         Route::get('/usuarios', [UserController::class, 'index']);
         Route::get('/usuarios/{usuario}', [UserController::class, 'show']);

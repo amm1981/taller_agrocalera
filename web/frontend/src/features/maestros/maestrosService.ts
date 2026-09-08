@@ -50,6 +50,10 @@ export async function updateMasterRecord(tab: MasterTabKey, id: number, payload:
   return data.data
 }
 
+export async function deleteMasterRecord(tab: MasterTabKey, id: number) {
+  await api.delete(`/${tab}/${id}`)
+}
+
 export async function importVehicleMasters(rows: VehicleImportRow[]) {
   const { data } = await api.post<DataResponse<VehicleImportSummary>>('/importaciones/vehiculos', { rows })
 

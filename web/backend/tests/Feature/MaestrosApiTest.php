@@ -3,7 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\Gerencia;
-use App\Models\Fundo;
+use App\Models\HorometroReapertura;
 use App\Models\HorometroRegistro;
 use App\Models\OrdenTrabajo;
 use App\Models\Personal;
@@ -191,6 +191,8 @@ class MaestrosApiTest extends TestCase
                         'nombre' => 'Tractor 900',
                         'marca' => 'CAT',
                         'modelo' => 'D6',
+                        'punto_medida' => 'PM-TR-900',
+                        'punto_medida_vigente_desde' => '2026-09-08',
                         'sede' => "{$sede->codigo} - {$sede->nombre}",
                         'horometro_base' => 15.5,
                     ],
@@ -200,6 +202,8 @@ class MaestrosApiTest extends TestCase
                         'nombre' => 'Excavadora 900',
                         'marca' => 'CAT',
                         'modelo' => '320D',
+                        'punto_medida' => 'PM-MP-900',
+                        'punto_medida_vigente_desde' => '2026-09-09',
                         'sede' => $sede->codigo,
                         'horometro_base' => 40,
                     ],
@@ -224,6 +228,8 @@ class MaestrosApiTest extends TestCase
             'fundo_id' => null,
             'sector_id' => null,
             'lote_id' => null,
+            'punto_medida' => 'PM-TR-900',
+            'punto_medida_vigente_desde' => '2026-09-08 00:00:00',
             'estado' => 'OPERATIVO',
             'activo' => true,
         ]);
@@ -236,6 +242,8 @@ class MaestrosApiTest extends TestCase
             'fundo_id' => null,
             'sector_id' => null,
             'lote_id' => null,
+            'punto_medida' => 'PM-MP-900',
+            'punto_medida_vigente_desde' => '2026-09-09 00:00:00',
             'estado' => 'OPERATIVO',
             'activo' => true,
         ]);
@@ -253,6 +261,97 @@ class MaestrosApiTest extends TestCase
         ]);
     }
 
+    public function test_admin_can_create_update_and_delete_vehicle_with_measurement_point(): void
+    {
+        $this->seed(DatabaseSeeder::class);
+        $token = $this->adminToken();
+
+        $created = $this
+            ->withToken($token)
+            ->postJson('/api/vehiculos', [
+                'codigo' => 'TR-777',
+                'nombre' => 'Tractor 777',
+                'tipo_vehiculo_id' => TipoVehiculo::where('nombre', 'Tractor')->value('id'),
+                'sede_id' => Sede::where('codigo', 'LOCAL')->value('id'),
+                'punto_medida' => 'PM-TR-777',
+                'punto_medida_vigente_desde' => '2026-09-08',
+                'horometro_base' => 0,
+            ]);
+
+        $created
+            ->assertCreated()
+            ->assertJsonPath('data.punto_medida', 'PM-TR-777')
+            ->assertJsonPath('data.punto_medida_vigente_desde', '2026-09-08T05:00:00.000000Z');
+
+        $vehicleId = $created->json('data.id');
+
+        $this
+            ->withToken($token)
+            ->putJson("/api/vehiculos/{$vehicleId}", [
+                'codigo' => 'TR-777',
+                'nombre' => 'Tractor 777',
+                'tipo_vehiculo_id' => TipoVehiculo::where('nombre', 'Tractor')->value('id'),
+                'sede_id' => Sede::where('codigo', 'LOCAL')->value('id'),
+                'punto_medida' => 'PM-TR-777-B',
+                'punto_medida_vigente_desde' => '2026-10-01',
+                'horometro_base' => 0,
+                'estado' => 'OPERATIVO',
+                'activo' => true,
+            ])
+            ->assertOk()
+            ->assertJsonPath('data.punto_medida', 'PM-TR-777-B');
+
+        $this
+            ->withToken($token)
+            ->deleteJson("/api/vehiculos/{$vehicleId}")
+            ->assertNoContent();
+
+        $this->assertDatabaseMissing(Vehiculo::class, [
+            'codigo' => 'TR-777',
+        ]);
+    }
+
+    public function test_non_admin_cannot_delete_vehicle(): void
+    {
+        $this->seed(DatabaseSeeder::class);
+
+        $user = User::factory()->create([
+            'username' => 'editor.maestros',
+            'email' => 'editor.maestros@agrocontrol.local',
+        ]);
+        $user->givePermissionTo('maestros.editar');
+
+        $vehiculo = Vehiculo::where('codigo', 'TR-015')->firstOrFail();
+
+        $this
+            ->withToken($user->createToken('feature-test')->plainTextToken)
+            ->deleteJson("/api/vehiculos/{$vehiculo->id}")
+            ->assertForbidden();
+    }
+
+    public function test_admin_cannot_delete_vehicle_with_dependencies(): void
+    {
+        $this->seed(DatabaseSeeder::class);
+
+        $vehiculo = Vehiculo::where('codigo', 'TR-015')->firstOrFail();
+
+        HorometroReapertura::query()->create([
+            'vehiculo_id' => $vehiculo->id,
+            'fecha' => '2026-09-08',
+            'tipo_registro' => 'INICIO',
+            'usuario_id' => User::where('email', 'admin@agrocontrol.local')->value('id'),
+            'fecha_hora' => '2026-09-08 10:00:00',
+            'estado_posterior' => 'APERTURADO',
+            'motivo' => 'Prueba',
+        ]);
+
+        $this
+            ->withToken($this->adminToken())
+            ->deleteJson("/api/vehiculos/{$vehiculo->id}")
+            ->assertStatus(409)
+            ->assertJsonPath('code', 'VEHICLE_HAS_DEPENDENCIES');
+    }
+
     public function test_admin_can_download_personal_import_template(): void
     {
         $this->seed(DatabaseSeeder::class);
@@ -268,7 +367,7 @@ class MaestrosApiTest extends TestCase
         $path = tempnam(sys_get_temp_dir(), 'personal_template_');
         file_put_contents($path, $response->streamedContent());
 
-        $zip = new ZipArchive();
+        $zip = new ZipArchive;
 
         $this->assertTrue($zip->open($path));
         $this->assertNotFalse($zip->locateName('xl/worksheets/sheet1.xml'));

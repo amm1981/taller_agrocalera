@@ -15,6 +15,7 @@ import {
   Save,
   Search,
   Tag,
+  Trash2,
   UserRound,
   Wrench,
   X,
@@ -24,8 +25,11 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { Button } from '../components/ui/button'
 import { FilterField, inputClass } from '../features/taller/components/FilterField'
+import { formatDate } from '../features/taller/components/tallerFormatters'
+import { useAuth } from '../features/auth/AuthContext'
 import {
   createMasterRecord,
+  deleteMasterRecord,
   downloadPersonalImportTemplate,
   downloadVehicleImportTemplate as downloadVehicleImportTemplateFile,
   getFundosMaster,
@@ -58,7 +62,7 @@ import { AppLayout } from '../layouts/AppLayout'
 type FieldConfig = {
   name: string
   label: string
-  type: 'text' | 'number' | 'select' | 'checkbox'
+  type: 'text' | 'number' | 'date' | 'select' | 'checkbox'
   required?: boolean
   nullable?: boolean
   options?: Array<{ value: string | number; label: string }>
@@ -100,6 +104,8 @@ const vehicleImportColumns: Array<keyof VehicleImportRow> = [
   'nombre',
   'marca',
   'modelo',
+  'punto_medida',
+  'punto_medida_vigente_desde',
   'sede',
   'horometro_base',
 ]
@@ -121,6 +127,8 @@ function emptyPayloadFor(tab: MasterTabKey): MasterPayload {
       tipo_vehiculo_id: '',
       marca: '',
       modelo: '',
+      punto_medida: '',
+      punto_medida_vigente_desde: '',
       sede_id: '',
       horometro_base: '',
     }
@@ -185,6 +193,8 @@ function fieldsFor(tab: MasterTabKey, lookups: MasterLookups): FieldConfig[] {
       { name: 'tipo_vehiculo_id', label: 'Tipo vehículo', type: 'select', required: true, options: tipoVehiculoOptions },
       { name: 'marca', label: 'Marca', type: 'text', nullable: true },
       { name: 'modelo', label: 'Modelo', type: 'text', nullable: true },
+      { name: 'punto_medida', label: 'Punto de medida', type: 'text', nullable: true },
+      { name: 'punto_medida_vigente_desde', label: 'Vigente desde', type: 'date', nullable: true },
       { name: 'sede_id', label: 'Sede base', type: 'select', required: true, options: sedeOptions },
       { name: 'horometro_base', label: 'Horómetro base', type: 'number', nullable: true },
     ]
@@ -367,10 +377,12 @@ function parsePersonalImportWorkbook(file: File): Promise<PersonalImportRow[]> {
 
 export function MaestrosPage() {
   const queryClient = useQueryClient()
+  const { session } = useAuth()
   const [searchParams] = useSearchParams()
   const activeTab = parseMasterTab(searchParams.get('tab'))
   const [filters, setFilters] = useState({ q: '', estado: '', per_page: 50 })
   const [editing, setEditing] = useState<MasterRecord | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<VehiculoMaster | null>(null)
   const [form, setForm] = useState<MasterPayload>(() => emptyPayloadFor('vehiculos'))
   const [isFormOpen, setIsFormOpen] = useState(false)
   const [vehicleImportRows, setVehicleImportRows] = useState<VehicleImportRow[]>([])
@@ -406,6 +418,8 @@ export function MaestrosPage() {
 
   const fields = useMemo(() => fieldsFor(activeTab, lookups), [activeTab, lookups])
   const active = tabs.find((tab) => tab.key === activeTab) ?? tabs[0]
+  const canDeleteVehicles = activeTab === 'vehiculos'
+    && (session?.roles.includes('ADMINISTRADOR') || session?.user.username === 'administrador')
 
   useEffect(() => {
     setEditing(null)
@@ -426,6 +440,7 @@ export function MaestrosPage() {
     },
     onSuccess: async () => {
       setEditing(null)
+      setDeleteTarget(null)
       setForm(emptyPayloadFor(activeTab))
       setIsFormOpen(false)
       await queryClient.invalidateQueries({ queryKey: ['maestros'] })
@@ -462,6 +477,17 @@ export function MaestrosPage() {
     },
     onError: (error) => {
       setVehicleImportError(error instanceof Error ? error.message : 'No se pudieron importar los vehículos.')
+    },
+  })
+
+  const deleteVehicle = useMutation({
+    mutationFn: (id: number) => deleteMasterRecord('vehiculos', id),
+    onSuccess: async () => {
+      setDeleteTarget(null)
+      await queryClient.invalidateQueries({ queryKey: ['maestros'] })
+      await queryClient.invalidateQueries({ queryKey: ['vehiculos'] })
+      await queryClient.invalidateQueries({ queryKey: ['horometros-dashboard'] })
+      await queryClient.invalidateQueries({ queryKey: ['horometros-validaciones'] })
     },
   })
 
@@ -694,6 +720,11 @@ export function MaestrosPage() {
           records={records.data?.data ?? []}
           isLoading={records.isLoading}
           onEdit={startEdit}
+          canDeleteVehicles={canDeleteVehicles}
+          onDeleteVehicle={(vehicle) => {
+            deleteVehicle.reset()
+            setDeleteTarget(vehicle)
+          }}
           onOpenQr={(vehicle) => setSelectedQrVehicle(vehicle)}
         />
       </div>
@@ -720,6 +751,19 @@ export function MaestrosPage() {
         onChange={(field, value) => setForm((current) => ({ ...current, [field]: value }))}
         onSubmit={() => save.mutate()}
       />
+
+      {deleteTarget ? (
+        <DeleteVehicleModal
+          vehicle={deleteTarget}
+          loading={deleteVehicle.isPending}
+          error={deleteVehicle.error instanceof Error ? deleteVehicle.error.message : null}
+          onCancel={() => {
+            deleteVehicle.reset()
+            setDeleteTarget(null)
+          }}
+          onConfirm={() => deleteVehicle.mutate(deleteTarget.id)}
+        />
+      ) : null}
     </AppLayout>
   )
 }
@@ -955,12 +999,16 @@ function MasterTable({
   records,
   isLoading,
   onEdit,
+  canDeleteVehicles,
+  onDeleteVehicle,
   onOpenQr,
 }: {
   tab: MasterTabKey
   records: MasterRecord[]
   isLoading: boolean
   onEdit: (record: MasterRecord) => void
+  canDeleteVehicles?: boolean
+  onDeleteVehicle?: (vehicle: VehiculoMaster) => void
   onOpenQr?: (vehicle: VehiculoMaster) => void
 }) {
   return (
@@ -972,7 +1020,7 @@ function MasterTable({
               {headersFor(tab).map((header) => (
                 <th key={header} className="border-b border-slate-200 px-4 py-3">{header}</th>
               ))}
-              <th className="border-b border-slate-200 px-4 py-3">Acción</th>
+              <th className="border-b border-slate-200 px-4 py-3">Acciones</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
@@ -982,10 +1030,23 @@ function MasterTable({
                   <td key={`${record.id}-${index}`} className="px-4 py-3 align-top text-slate-700">{cell}</td>
                 ))}
                 <td className="px-4 py-3 align-top">
-                  <Button variant="secondary" onClick={() => onEdit(record)}>
-                    <Pencil className="h-4 w-4" aria-hidden="true" />
-                    Editar
-                  </Button>
+                  <div className="flex flex-wrap gap-2">
+                    <Button variant="secondary" onClick={() => onEdit(record)}>
+                      <Pencil className="h-4 w-4" aria-hidden="true" />
+                      Editar
+                    </Button>
+                    {tab === 'vehiculos' && canDeleteVehicles && 'tipo_vehiculo' in record ? (
+                      <Button
+                        variant="secondary"
+                        className="border-red-200 text-red-700 hover:bg-red-50"
+                        onClick={() => onDeleteVehicle?.(record as VehiculoMaster)}
+                        title="Eliminar vehículo"
+                        aria-label={`Eliminar vehículo ${recordTitle(record)}`}
+                      >
+                        <Trash2 className="h-4 w-4" aria-hidden="true" />
+                      </Button>
+                    ) : null}
+                  </div>
                 </td>
               </tr>
             ))}
@@ -1005,7 +1066,7 @@ function MasterTable({
 
 function headersFor(tab: MasterTabKey) {
   if (tab === 'vehiculos') {
-    return ['Equipo', 'Tipo', 'Sede', 'Estado', 'Activo', 'QR']
+    return ['Equipo', 'Tipo', 'Punto de medida', 'Vigente desde', 'Sede', 'Estado', 'Activo', 'QR']
   }
 
   if (tab === 'personal') {
@@ -1044,6 +1105,8 @@ function cellsFor(
         {recordTitle(record)}
       </Link>,
       record.tipo_vehiculo?.nombre ?? '-',
+      record.punto_medida ?? '-',
+      formatDate(record.punto_medida_vigente_desde),
       relationLabel(record.sede),
       masterStatus(record.estado),
       record.activo ? 'Sí' : 'No',
@@ -1092,4 +1155,52 @@ function cellsFor(
   }
 
   return [<strong className="text-slate-950">{recordTitle(record)}</strong>, 'estado' in record ? masterStatus(record.estado) : '-']
+}
+
+function DeleteVehicleModal({
+  vehicle,
+  loading,
+  error,
+  onCancel,
+  onConfirm,
+}: {
+  vehicle: VehiculoMaster
+  loading: boolean
+  error: string | null
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm">
+      <section className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl">
+        <div className="flex items-start gap-3">
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-red-50 text-red-700">
+            <Trash2 className="h-5 w-5" aria-hidden="true" />
+          </span>
+          <div>
+            <h3 className="text-base font-black text-slate-950">Eliminar vehículo</h3>
+            <p className="mt-1 text-sm font-medium text-slate-600">
+              Esta acción eliminará <strong>{recordTitle(vehicle)}</strong>. No se permitirá si tiene registros de horómetro u órdenes asociadas.
+            </p>
+          </div>
+        </div>
+
+        {error ? (
+          <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700">
+            {error}
+          </div>
+        ) : null}
+
+        <div className="mt-5 flex justify-end gap-2">
+          <Button variant="secondary" onClick={onCancel} disabled={loading}>
+            Cancelar
+          </Button>
+          <Button className="bg-red-700 hover:bg-red-800" onClick={onConfirm} disabled={loading}>
+            <Trash2 className="h-4 w-4" aria-hidden="true" />
+            Eliminar
+          </Button>
+        </div>
+      </section>
+    </div>
+  )
 }

@@ -3,8 +3,8 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
-use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class Vehiculo extends Model
 {
@@ -17,6 +17,8 @@ class Vehiculo extends Model
         'tipo_vehiculo_id',
         'marca',
         'modelo',
+        'punto_medida',
+        'punto_medida_vigente_desde',
         'gerencia_id',
         'sede_id',
         'fundo_id',
@@ -32,6 +34,7 @@ class Vehiculo extends Model
         return [
             'activo' => 'boolean',
             'horometro_base' => 'decimal:2',
+            'punto_medida_vigente_desde' => 'date',
         ];
     }
 

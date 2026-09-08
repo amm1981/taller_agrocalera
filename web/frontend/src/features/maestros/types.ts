@@ -65,6 +65,8 @@ export type VehiculoMaster = {
   tipo_vehiculo_id: number
   marca: string | null
   modelo: string | null
+  punto_medida: string | null
+  punto_medida_vigente_desde: string | null
   gerencia_id: number | null
   sede_id: number
   fundo_id: number | null
@@ -123,6 +125,8 @@ export type VehicleImportRow = {
   nombre?: string
   marca?: string
   modelo?: string
+  punto_medida?: string
+  punto_medida_vigente_desde?: string
   sede: string
   horometro_base?: string
 }

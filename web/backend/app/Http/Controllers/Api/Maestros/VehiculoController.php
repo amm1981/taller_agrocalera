@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\Maestros;
 use App\Domain\Mantenimiento\Services\PreventivoService;
 use App\Http\Controllers\Api\Concerns\FormatsApiPagination;
 use App\Http\Controllers\Controller;
+use App\Models\HorometroReapertura;
 use App\Models\HorometroRegistro;
 use App\Models\OrdenTrabajo;
 use App\Models\Sede;
@@ -200,6 +201,30 @@ class VehiculoController extends Controller
         ]);
     }
 
+    public function destroy(Request $request, Vehiculo $vehiculo): JsonResponse
+    {
+        abort_unless(
+            $request->user()?->hasRole('ADMINISTRADOR') || $request->user()?->username === 'administrador',
+            403,
+            'Solo el usuario administrador puede eliminar vehículos.',
+        );
+
+        $hasDependencies = HorometroRegistro::query()->where('vehiculo_id', $vehiculo->id)->exists()
+            || HorometroReapertura::query()->where('vehiculo_id', $vehiculo->id)->exists()
+            || OrdenTrabajo::query()->where('vehiculo_id', $vehiculo->id)->exists();
+
+        if ($hasDependencies) {
+            return response()->json([
+                'message' => 'No se puede eliminar el vehículo porque tiene registros asociados.',
+                'code' => 'VEHICLE_HAS_DEPENDENCIES',
+            ], 409);
+        }
+
+        $vehiculo->delete();
+
+        return response()->json(null, 204);
+    }
+
     public function importTemplate(): BinaryFileResponse
     {
         $sedes = Sede::query()
@@ -211,10 +236,10 @@ class VehiculoController extends Controller
             ->all();
 
         $path = SimpleXlsx::createTemplate(
-            ['codigo', 'tipo_vehiculo', 'placa', 'nombre', 'marca', 'modelo', 'sede', 'horometro_base'],
+            ['codigo', 'tipo_vehiculo', 'placa', 'nombre', 'marca', 'modelo', 'punto_medida', 'punto_medida_vigente_desde', 'sede', 'horometro_base'],
             [
-                ['TR-100', 'Tractor', '', 'Tractor TR-100', 'John Deere', '5075E', $sedes[0] ?? '', 0],
-                ['MP-001', 'Maquinaria Pesada', '', 'Excavadora MP-001', 'CAT', '320D', $sedes[0] ?? '', 0],
+                ['TR-100', 'Tractor', '', 'Tractor TR-100', 'John Deere', '5075E', 'PM-TR-100', now()->toDateString(), $sedes[0] ?? '', 0],
+                ['MP-001', 'Maquinaria Pesada', '', 'Excavadora MP-001', 'CAT', '320D', 'PM-MP-001', now()->toDateString(), $sedes[0] ?? '', 0],
             ],
             [
                 'tipo_vehiculo' => ['Tractor', 'Maquinaria Pesada'],
@@ -244,6 +269,8 @@ class VehiculoController extends Controller
             'rows.*.nombre' => ['nullable', 'string', 'max:160'],
             'rows.*.marca' => ['nullable', 'string', 'max:120'],
             'rows.*.modelo' => ['nullable', 'string', 'max:120'],
+            'rows.*.punto_medida' => ['nullable', 'string', 'max:120'],
+            'rows.*.punto_medida_vigente_desde' => ['nullable', 'date'],
             'rows.*.sede' => ['required', 'string', 'max:180'],
             'rows.*.horometro_base' => ['nullable', 'numeric', 'min:0'],
         ]);
@@ -279,6 +306,8 @@ class VehiculoController extends Controller
                         'tipo_vehiculo_id' => $tipo->id,
                         'marca' => $this->nullableText($row['marca'] ?? null),
                         'modelo' => $this->nullableText($row['modelo'] ?? null),
+                        'punto_medida' => $this->nullableText($row['punto_medida'] ?? null),
+                        'punto_medida_vigente_desde' => $row['punto_medida_vigente_desde'] ?? null,
                         'gerencia_id' => null,
                         'sede_id' => $sede->id,
                         'fundo_id' => null,
@@ -310,6 +339,8 @@ class VehiculoController extends Controller
             'tipo_vehiculo_id' => ['required', 'integer', Rule::exists('tipos_vehiculo', 'id')],
             'marca' => ['nullable', 'string', 'max:120'],
             'modelo' => ['nullable', 'string', 'max:120'],
+            'punto_medida' => ['nullable', 'string', 'max:120'],
+            'punto_medida_vigente_desde' => ['nullable', 'date'],
             'gerencia_id' => ['nullable', 'integer', Rule::exists('gerencias', 'id')],
             'sede_id' => ['required', 'integer', Rule::exists('sedes', 'id')],
             'fundo_id' => ['nullable', 'integer', Rule::exists('fundos', 'id')],

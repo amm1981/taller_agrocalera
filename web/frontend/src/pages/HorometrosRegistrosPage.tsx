@@ -162,13 +162,20 @@ export function HorometrosRegistrosPage() {
               <option value="false">Sin foto</option>
             </select>
           </FilterField>
-          <div className="flex items-end gap-2">
-            <Button className="flex-1" variant="secondary" onClick={() => setFilters({ per_page: 30 })}>Limpiar</Button>
-            <Button variant="ghost" onClick={() => void registros.refetch()} disabled={registros.isFetching} aria-label="Actualizar registros">
+          <div className="flex flex-wrap items-end justify-end gap-2 md:col-span-2 xl:col-span-6">
+            <Button className="min-w-24 whitespace-nowrap" variant="secondary" onClick={() => setFilters({ per_page: 30 })}>Limpiar</Button>
+            <Button
+              className="h-10 w-10 rounded-lg border border-slate-200 bg-white p-0 text-slate-600 shadow-sm hover:bg-slate-50"
+              variant="ghost"
+              onClick={() => void registros.refetch()}
+              disabled={registros.isFetching}
+              aria-label="Actualizar registros"
+              title="Actualizar registros"
+            >
               <RefreshCw className={`h-4 w-4 ${registros.isFetching ? 'animate-spin' : ''}`} aria-hidden="true" />
             </Button>
             <Button
-              className="bg-[#0e5631] text-white hover:bg-[#0b4729]"
+              className="min-w-32 whitespace-nowrap rounded-lg bg-[#0e5631] px-4 font-bold text-white shadow-sm hover:bg-[#0b4729]"
               onClick={() => exportMutation.mutate()}
               disabled={exportMutation.isPending}
             >
@@ -176,7 +183,7 @@ export function HorometrosRegistrosPage() {
               Exportar
             </Button>
             <Button
-              className="flex-1 bg-[#0e5631] text-white hover:bg-[#0b4729]"
+              className="min-w-40 whitespace-nowrap rounded-lg bg-[#0e5631] px-4 font-bold text-white shadow-sm hover:bg-[#0b4729]"
               onClick={() => exportSapMutation.mutate()}
               disabled={exportSapMutation.isPending}
             >

@@ -6,6 +6,7 @@ use App\Models\HorometroConfiguracion;
 use App\Models\HorometroReapertura;
 use App\Models\HorometroRegistro;
 use App\Models\User;
+use App\Models\UsuarioAplicativo;
 use App\Models\Vehiculo;
 use App\Models\VehiculoPuntoMedida;
 use Carbon\CarbonImmutable;
@@ -17,7 +18,7 @@ class HorometroService
     /**
      * @param  array<string, mixed>  $data
      */
-    public function registrarInicio(array $data, User $user): HorometroRegistro
+    public function registrarInicio(array $data, User|UsuarioAplicativo $user): HorometroRegistro
     {
         return DB::transaction(function () use ($data, $user) {
             $vehiculo = Vehiculo::query()->lockForUpdate()->findOrFail($data['vehiculo_id']);
@@ -34,10 +35,10 @@ class HorometroService
             $fechaHora = $this->fechaHora($data['fecha_hora_inicio'] ?? null);
             $fecha = CarbonImmutable::parse($data['fecha'] ?? $fechaHora->toDateString())->toDateString();
             $reapertura = $this->reaperturaDisponible((int) $data['vehiculo_id'], $fecha, 'INICIO');
-            $config = $this->configuracion();
+            $config = $this->configuracion($vehiculo->tipo_vehiculo_id);
 
             if (! $reapertura) {
-                $this->validarHorarioInicio($fechaHora);
+                $this->validarHorarioInicio($fechaHora, $config);
             }
 
             $this->validarCorreccionManual((bool) ($data['correccion_manual_inicio'] ?? false), $config, 'correccion_manual_inicio');
@@ -66,7 +67,8 @@ class HorometroService
             $registro->fill([
                 'client_reference' => $data['client_reference'] ?? null,
                 'operario_id' => $data['operario_id'] ?? $registro->operario_id,
-                'usuario_responsable_id' => $user->id,
+                'usuario_responsable_id' => $user instanceof User ? $user->id : $registro->usuario_responsable_id,
+                'usuario_aplicativo_id' => $user instanceof UsuarioAplicativo ? $user->id : $registro->usuario_aplicativo_id,
                 'fundo_id' => $data['fundo_id'] ?? $registro->fundo_id,
                 'sector_id' => $data['sector_id'] ?? $registro->sector_id,
                 'lote_id' => $data['lote_id'] ?? $registro->lote_id,
@@ -93,17 +95,17 @@ class HorometroService
     /**
      * @param  array<string, mixed>  $data
      */
-    public function registrarCierre(HorometroRegistro $registro, array $data, User $user): HorometroRegistro
+    public function registrarCierre(HorometroRegistro $registro, array $data, User|UsuarioAplicativo $user): HorometroRegistro
     {
         return DB::transaction(function () use ($registro, $data, $user) {
             $vehiculo = Vehiculo::query()->lockForUpdate()->findOrFail($registro->vehiculo_id);
             $registro->refresh();
             $fechaHora = $this->fechaHora($data['fecha_hora_final'] ?? null);
             $reapertura = $this->reaperturaDisponible($registro->vehiculo_id, $registro->fecha->toDateString(), 'CIERRE');
-            $config = $this->configuracion();
+            $config = $this->configuracion($vehiculo->tipo_vehiculo_id);
 
             if (! $reapertura) {
-                $this->validarHorarioCierre($fechaHora);
+                $this->validarHorarioCierre($fechaHora, $config);
             }
 
             $this->validarCorreccionManual((bool) ($data['correccion_manual_final'] ?? false), $config, 'correccion_manual_final');
@@ -148,7 +150,8 @@ class HorometroService
             }
 
             $registro->update([
-                'usuario_responsable_id' => $user->id,
+                'usuario_responsable_id' => $user instanceof User ? $user->id : $registro->usuario_responsable_id,
+                'usuario_aplicativo_id' => $user instanceof UsuarioAplicativo ? $user->id : $registro->usuario_aplicativo_id,
                 'punto_medida' => $registro->punto_medida ?? $this->puntoMedidaVigente($vehiculo, $registro->fecha->toDateString()),
                 'horometro_final_ocr' => $data['horometro_final_ocr'] ?? null,
                 'horometro_final_confirmado' => $data['horometro_final_confirmado'],
@@ -236,9 +239,8 @@ class HorometroService
         return $this->loadRegistro($registro);
     }
 
-    private function validarHorarioInicio(CarbonImmutable $fechaHora): void
+    private function validarHorarioInicio(CarbonImmutable $fechaHora, HorometroConfiguracion $config): void
     {
-        $config = $this->configuracion();
         $hora = $fechaHora->format('H:i:s');
 
         if ($hora < $config->hora_inicio_desde || $hora > $config->hora_inicio_hasta) {
@@ -248,10 +250,8 @@ class HorometroService
         }
     }
 
-    private function validarHorarioCierre(CarbonImmutable $fechaHora): void
+    private function validarHorarioCierre(CarbonImmutable $fechaHora, HorometroConfiguracion $config): void
     {
-        $config = $this->configuracion();
-
         if ($fechaHora->format('H:i:s') > $config->hora_cierre_hasta) {
             throw ValidationException::withMessages([
                 'fecha_hora_final' => ['El cierre debe registrarse hasta las 19:30, salvo reapertura.'],
@@ -264,7 +264,8 @@ class HorometroService
         $cierreAnterior = $this->ultimaReferenciaValida($vehiculoId, antesDeFecha: $fecha)
             ?? $this->referenciaValida(Vehiculo::query()->whereKey($vehiculoId)->value('horometro_base'));
 
-        $tolerancia = (float) $this->configuracion()->tolerancia_inicio_horas;
+        $tipoVehiculoId = Vehiculo::query()->whereKey($vehiculoId)->value('tipo_vehiculo_id');
+        $tolerancia = (float) $this->configuracion($tipoVehiculoId)->tolerancia_inicio_horas;
 
         if ($cierreAnterior === null) {
             return;
@@ -349,9 +350,17 @@ class HorometroService
         ];
     }
 
-    private function configuracion(): HorometroConfiguracion
+    private function configuracion(?int $tipoVehiculoId = null): HorometroConfiguracion
     {
-        return HorometroConfiguracion::query()->first()
+        if ($tipoVehiculoId) {
+            return HorometroConfiguracion::query()
+                ->where('tipo_vehiculo_id', $tipoVehiculoId)
+                ->first()
+                ?? HorometroConfiguracion::query()->create(['tipo_vehiculo_id' => $tipoVehiculoId]);
+        }
+
+        return HorometroConfiguracion::query()->whereNull('tipo_vehiculo_id')->first()
+            ?? HorometroConfiguracion::query()->first()
             ?? HorometroConfiguracion::query()->create([]);
     }
 
@@ -408,6 +417,6 @@ class HorometroService
 
     private function loadRegistro(HorometroRegistro $registro): HorometroRegistro
     {
-        return $registro->refresh()->load(['vehiculo.tipoVehiculo', 'operario', 'usuarioResponsable', 'fundo', 'sector', 'lote']);
+        return $registro->refresh()->load(['vehiculo.tipoVehiculo', 'operario', 'usuarioResponsable', 'usuarioAplicativo', 'fundo', 'sector', 'lote']);
     }
 }

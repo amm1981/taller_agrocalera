@@ -1,6 +1,6 @@
 import { api } from '../../api/http'
 import type { PaginatedResponse } from '../../types/api'
-import type { Permission, Role, RoleFilters, RolePayload, User, UserFilters, UserPayload } from './types'
+import type { Permission, Role, RoleFilters, RolePayload, User, UserFilters, UserPayload, UsuarioAplicativo, UsuarioAplicativoPayload } from './types'
 
 type DataResponse<T> = {
   data: T
@@ -18,6 +18,26 @@ export async function getUsuarios(filters?: UserFilters) {
   })
 
   return data
+}
+
+export async function getUsuariosAplicativo(filters?: UserFilters) {
+  const { data } = await api.get<PaginatedResponse<UsuarioAplicativo>>('/usuarios-aplicativo', {
+    params: cleanParams(filters),
+  })
+
+  return data
+}
+
+export async function createUsuarioAplicativo(payload: UsuarioAplicativoPayload) {
+  const { data } = await api.post<DataResponse<UsuarioAplicativo>>('/usuarios-aplicativo', payload)
+
+  return data.data
+}
+
+export async function updateUsuarioAplicativo(id: number, payload: UsuarioAplicativoPayload) {
+  const { data } = await api.put<DataResponse<UsuarioAplicativo>>(`/usuarios-aplicativo/${id}`, payload)
+
+  return data.data
 }
 
 export async function createUsuario(payload: UserPayload) {

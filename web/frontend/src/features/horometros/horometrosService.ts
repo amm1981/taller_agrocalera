@@ -6,6 +6,7 @@ import type {
   HorometroFilters,
   HorometroReaperturasBoard,
   HorometroRegistro,
+  HorometroConfiguracionPorTipo,
   HorometrosReporte,
   CrearReaperturaPayload,
   RegistrarCierrePayload,
@@ -121,8 +122,20 @@ export async function getHorometroConfiguracion() {
   return data.data
 }
 
+export async function getHorometroConfiguraciones() {
+  const { data } = await api.get<DataResponse<HorometroConfiguracionPorTipo[]>>('/horometros/configuraciones')
+
+  return data.data
+}
+
 export async function updateHorometroConfiguracion(payload: Omit<HorometroConfiguracion, 'id'>) {
   const { data } = await api.put<DataResponse<HorometroConfiguracion>>('/horometros/configuracion', payload)
+
+  return data.data
+}
+
+export async function updateHorometroConfiguracionTipo(tipoVehiculoId: number, payload: Omit<HorometroConfiguracion, 'id' | 'tipo_vehiculo_id'>) {
+  const { data } = await api.put<DataResponse<HorometroConfiguracion>>(`/horometros/configuraciones/${tipoVehiculoId}`, payload)
 
   return data.data
 }

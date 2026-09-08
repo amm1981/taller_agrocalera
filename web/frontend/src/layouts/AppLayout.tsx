@@ -19,6 +19,7 @@ import {
   Search,
   Settings,
   ShieldCheck,
+  Smartphone,
   Tag,
   UserRound,
   Users,
@@ -49,6 +50,7 @@ const horometrosNavigation = [
 
 const usuariosNavigation = [
   { label: 'Usuarios', icon: Users, to: '/usuarios', key: 'usuarios' },
+  { label: 'Usuarios aplicativo', icon: Smartphone, to: '/usuarios/aplicativo', key: 'usuarios-aplicativo' },
   { label: 'Roles', icon: ShieldCheck, to: '/usuarios/roles', key: 'roles' },
 ]
 

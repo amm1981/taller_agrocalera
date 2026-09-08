@@ -36,6 +36,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -85,7 +86,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
@@ -140,8 +140,6 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 private const val DEFAULT_API_URL = "https://taller.agrocalera.app/api"
-private val DEFAULT_RESPONSIBLE_USER = BuildConfig.HOROMETRO_SYNC_USER
-private val DEFAULT_RESPONSIBLE_PASSWORD = BuildConfig.HOROMETRO_SYNC_PASSWORD
 private val AppBackground = Color(0xFFF6F8F7)
 private val AppGreen = Color(0xFF087A3D)
 private val AppGreenDark = Color(0xFF064E3B)
@@ -151,18 +149,18 @@ private val AppText = Color(0xFF0F172A)
 private val AppMuted = Color(0xFF64748B)
 private val AppLine = Color(0xFFE2E8F0)
 
-enum class RegistrationType(
+data class RegistrationType(
+    val id: Int?,
     val title: String,
     val subtitle: String,
-) {
-    TRACTORS("Tractores", "Registro directo"),
-    HEAVY("Maquinaria pesada", "Requiere login del responsable"),
-}
+    val config: HourmeterConfig = HourmeterConfig.DEFAULT,
+)
 
 data class Vehicle(
     val id: Int,
     val code: String,
     val name: String,
+    val typeId: Int?,
     val typeName: String,
     val fundoId: Int?,
     val sectorId: Int?,
@@ -209,6 +207,10 @@ data class HourmeterConfig(
     val requirePhoto: Boolean,
     val reopeningMinutes: Int,
     val ocrEnabled: Boolean,
+    val requiredSede: Boolean = true,
+    val requiredOperator: Boolean = true,
+    val requiredPhotoEvidence: Boolean = true,
+    val operatorTypes: List<String> = emptyList(),
 ) {
     companion object {
         val DEFAULT = HourmeterConfig(
@@ -221,14 +223,21 @@ data class HourmeterConfig(
             requirePhoto = true,
             reopeningMinutes = 120,
             ocrEnabled = true,
+            requiredSede = true,
+            requiredOperator = true,
+            requiredPhotoEvidence = true,
+            operatorTypes = emptyList(),
         )
     }
 }
 
 data class AppSession(
+    val userId: Int,
     val token: String,
     val userName: String,
     val role: String,
+    val personalId: Int? = null,
+    val allowedTypes: List<RegistrationType> = emptyList(),
 )
 
 data class HourmeterCaptureDraft(
@@ -250,6 +259,7 @@ data class FieldData(
     val sectores: List<LocationOption>,
     val lotes: List<LocationOption>,
     val config: HourmeterConfig,
+    val registrationTypes: List<RegistrationType> = emptyList(),
 ) {
     companion object {
         val EMPTY = FieldData(
@@ -260,6 +270,7 @@ data class FieldData(
             sectores = emptyList(),
             lotes = emptyList(),
             config = HourmeterConfig.DEFAULT,
+            registrationTypes = emptyList(),
         )
     }
 }
@@ -298,14 +309,17 @@ class AgroControlApi(private val baseUrl: String) {
             .put("password", password)
             .put("device_name", "android-horometro")
 
-        val json = request("POST", "/auth/login", payload = payload)
+        val json = request("POST", "/app/horometros/login", payload = payload)
         val user = json.getJSONObject("user")
-        val roles = json.optJSONArray("roles") ?: JSONArray()
+        val types = parseRegistrationTypes(json.optJSONArray("tipos_registro"))
 
         AppSession(
+            userId = user.getInt("id"),
             token = json.getString("token"),
-            userName = user.optString("name", "Usuario"),
-            role = roles.optString(0, "OPERACION"),
+            userName = user.optString("nombre", "Usuario"),
+            role = "APP_HOROMETROS",
+            personalId = user.nullableInt("personal_id"),
+            allowedTypes = types,
         )
     }
 
@@ -318,6 +332,7 @@ class AgroControlApi(private val baseUrl: String) {
                 id = item.getInt("id"),
                 code = item.optString("codigo"),
                 name = item.optString("nombre", item.optString("codigo")),
+                typeId = item.nullableInt("tipo_vehiculo_id"),
                 typeName = type?.optString("nombre") ?: "Equipo",
                 fundoId = item.nullableInt("fundo_id"),
                 sectorId = item.nullableInt("sector_id"),
@@ -380,11 +395,11 @@ class AgroControlApi(private val baseUrl: String) {
                 fullName = "${item.optString("nombres")} ${item.optString("apellidos")}".trim(),
                 type = item.optString("tipo"),
             )
-        }.filter { it.type == "OPERARIO" || it.type == "CONDUCTOR" || it.type == "TRACTORISTA" || it.type == "MAQUINISTA" }
+        }
     }
 
     suspend fun pendingRecords(token: String): List<HourmeterRecord> = withContext(Dispatchers.IO) {
-        requestAll("/horometros/pendientes", token).mapJsonObjects(::recordFromJson)
+        requestAll("/app/horometros/pendientes", token).mapJsonObjects(::recordFromJson)
     }
 
     suspend fun configuration(token: String): HourmeterConfig = withContext(Dispatchers.IO) {
@@ -393,22 +408,24 @@ class AgroControlApi(private val baseUrl: String) {
 
     suspend fun fieldData(token: String, onProgress: (Int) -> Unit = {}): FieldData {
         onProgress(10)
-        val newVehicles = vehicles(token)
-        onProgress(25)
-        val newOperators = operators(token)
-        onProgress(40)
-        val newPending = pendingRecords(token)
+        val data = withContext(Dispatchers.IO) {
+            request("GET", "/app/horometros/sync", token = token).getJSONObject("data")
+        }
+        onProgress(35)
+        val newTypes = parseRegistrationTypes(data.optJSONArray("tipos_registro"))
+        val newVehicles = data.optJSONArray("vehiculos")?.mapJsonObjects(::vehicleFromJson) ?: emptyList()
         onProgress(55)
-        val newFundos = emptyList<LocationOption>()
+        val newOperators = data.optJSONArray("operadores")?.mapJsonObjects(::operatorFromJson) ?: emptyList()
         onProgress(70)
-        val newSectores = emptyList<LocationOption>()
+        val newPending = data.optJSONArray("pendientes")?.mapJsonObjects(::recordFromJson) ?: emptyList()
         onProgress(82)
-        val newLotes = emptyList<LocationOption>()
-        onProgress(94)
-        val newConfig = configuration(token)
+        val newFundos = emptyList<LocationOption>()
+        val newSectores = data.optJSONArray("sectores")?.mapJsonObjects(::locationFromJson) ?: emptyList()
+        val newLotes = data.optJSONArray("lotes")?.mapJsonObjects(::locationFromJson) ?: emptyList()
+        val newConfig = newTypes.firstOrNull()?.config ?: HourmeterConfig.DEFAULT
         onProgress(100)
 
-        return FieldData(newVehicles, newOperators, newPending, newFundos, newSectores, newLotes, newConfig)
+        return FieldData(newVehicles, newOperators, newPending, newFundos, newSectores, newLotes, newConfig, newTypes)
     }
 
     suspend fun submitLocalRecord(token: String, local: LocalHourmeterRecord, onStartSaved: (Int) -> Unit = {}): LocalHourmeterRecord {
@@ -512,7 +529,7 @@ class AgroControlApi(private val baseUrl: String) {
             payload.put("foto_inicial_base64", encodeFileAsBase64(photoPath))
         }
 
-        recordFromJson(request("POST", "/horometros/inicio", token = token, payload = payload).getJSONObject("data"))
+        recordFromJson(request("POST", "/app/horometros/inicio", token = token, payload = payload).getJSONObject("data"))
     }
 
     suspend fun registerClose(
@@ -543,7 +560,7 @@ class AgroControlApi(private val baseUrl: String) {
             payload.put("foto_final_base64", encodeFileAsBase64(photoPath))
         }
 
-        recordFromJson(request("POST", "/horometros/$recordId/cierre", token = token, payload = payload).getJSONObject("data"))
+        recordFromJson(request("POST", "/app/horometros/$recordId/cierre", token = token, payload = payload).getJSONObject("data"))
     }
 
     private fun request(
@@ -631,6 +648,7 @@ private fun recordFromJson(item: JSONObject): HourmeterRecord {
                 id = vehicle.optInt("id"),
                 code = vehicle.optString("codigo"),
                 name = vehicle.optString("nombre", vehicle.optString("codigo")),
+                typeId = vehicle.nullableInt("tipo_vehiculo_id"),
                 typeName = type?.optString("nombre") ?: "Equipo",
                 fundoId = vehicle.nullableInt("fundo_id"),
                 sectorId = vehicle.nullableInt("sector_id"),
@@ -654,6 +672,8 @@ private fun recordFromJson(item: JSONObject): HourmeterRecord {
 }
 
 private fun configFromJson(item: JSONObject): HourmeterConfig {
+    val parametros = item.optJSONObject("parametros_adicionales")
+
     return HourmeterConfig(
         startFrom = item.optString("hora_inicio_desde", HourmeterConfig.DEFAULT.startFrom),
         startTo = item.optString("hora_inicio_hasta", HourmeterConfig.DEFAULT.startTo),
@@ -664,6 +684,10 @@ private fun configFromJson(item: JSONObject): HourmeterConfig {
         requirePhoto = item.optBoolean("foto_obligatoria", true),
         reopeningMinutes = item.optInt("vigencia_reapertura_minutos", 120),
         ocrEnabled = item.optBoolean("ocr_activo", true),
+        requiredSede = item.optJSONObject("campos_requeridos")?.optBoolean("sede", true) ?: true,
+        requiredOperator = item.optJSONObject("campos_requeridos")?.optBoolean("operario", true) ?: true,
+        requiredPhotoEvidence = item.optJSONObject("campos_requeridos")?.optBoolean("foto", true) ?: true,
+        operatorTypes = parametros?.optJSONArray("personal_tipos").orEmptyArray().mapStrings(),
     )
 }
 
@@ -671,24 +695,133 @@ private fun <T> JSONArray.mapJsonObjects(transform: (JSONObject) -> T): List<T> 
     return (0 until length()).map { index -> transform(getJSONObject(index)) }
 }
 
-private const val FIELD_DATA_CACHE_FILE = "horometro_field_data_cache.json"
-private const val LOCAL_RECORDS_CACHE_FILE = "horometro_local_records.json"
-
-private fun saveFieldDataCache(context: Context, cached: CachedFieldData) {
-    runCatching {
-        File(context.filesDir, FIELD_DATA_CACHE_FILE).writeText(cached.toJson().toString())
+private fun parseRegistrationTypes(items: JSONArray?): List<RegistrationType> {
+    return items.orEmptyArray().mapJsonObjects { item ->
+        RegistrationType(
+            id = item.optInt("id"),
+            title = item.optString("nombre", "Registro"),
+            subtitle = "Registro de horómetro",
+            config = item.optJSONObject("configuracion_horometro")?.let(::configFromJson) ?: HourmeterConfig.DEFAULT,
+        )
     }
 }
 
-private fun loadFieldDataCache(context: Context): CachedFieldData? {
+private fun RegistrationType.toJson(): JSONObject {
+    return JSONObject()
+        .putNullable("id", id)
+        .put("title", title)
+        .put("subtitle", subtitle)
+        .put("config", config.toJson())
+}
+
+private fun registrationTypeFromCacheJson(json: JSONObject): RegistrationType {
+    return RegistrationType(
+        id = json.nullableInt("id"),
+        title = json.optString("title", "Registro"),
+        subtitle = json.optString("subtitle", "Registro de horómetro"),
+        config = json.optJSONObject("config")?.let(::configFromCacheJson) ?: HourmeterConfig.DEFAULT,
+    )
+}
+
+private fun vehicleFromJson(item: JSONObject): Vehicle {
+    val type = item.optJSONObject("tipo_vehiculo")
+
+    return Vehicle(
+        id = item.getInt("id"),
+        code = item.optString("codigo"),
+        name = item.optString("nombre", item.optString("codigo")),
+        typeId = item.nullableInt("tipo_vehiculo_id"),
+        typeName = type?.optString("nombre") ?: "Equipo",
+        fundoId = item.nullableInt("fundo_id"),
+        sectorId = item.nullableInt("sector_id"),
+        loteId = item.nullableInt("lote_id"),
+        sedeName = item.optJSONObject("sede")?.optString("nombre"),
+        loteName = item.optJSONObject("lote")?.optString("nombre"),
+        sedeId = item.nullableInt("sede_id"),
+        lastValid = item.nullableString("ultimo_horometro_valido"),
+        referenceSynced = item.has("ultimo_horometro_valido"),
+    )
+}
+
+private fun operatorFromJson(item: JSONObject): Operator {
+    return Operator(
+        id = item.getInt("id"),
+        dni = item.optString("dni"),
+        fullName = "${item.optString("nombres")} ${item.optString("apellidos")}".trim(),
+        type = item.optString("tipo"),
+    )
+}
+
+private fun locationFromJson(item: JSONObject): LocationOption {
+    return LocationOption(
+        id = item.getInt("id"),
+        code = item.optString("codigo"),
+        name = item.optString("nombre"),
+        parentId = item.nullableInt("parent_id"),
+    )
+}
+
+private const val APP_SESSION_CACHE_FILE = "horometro_app_session.json"
+private fun fieldDataCacheFile(userId: Int) = "horometro_field_data_cache_$userId.json"
+private fun localRecordsCacheFile(userId: Int) = "horometro_local_records_$userId.json"
+
+private fun saveAppSession(context: Context, session: AppSession) {
+    runCatching {
+        File(context.filesDir, APP_SESSION_CACHE_FILE).writeText(session.toJson().toString())
+    }
+}
+
+private fun loadAppSession(context: Context): AppSession? {
     return runCatching {
-        val file = File(context.filesDir, FIELD_DATA_CACHE_FILE)
+        val file = File(context.filesDir, APP_SESSION_CACHE_FILE)
+        if (!file.exists()) {
+            return null
+        }
+
+        appSessionFromJson(JSONObject(file.readText()))
+    }.getOrNull()
+}
+
+private fun clearAppSession(context: Context) {
+    runCatching { File(context.filesDir, APP_SESSION_CACHE_FILE).delete() }
+}
+
+private fun saveFieldDataCache(context: Context, userId: Int, cached: CachedFieldData) {
+    runCatching {
+        File(context.filesDir, fieldDataCacheFile(userId)).writeText(cached.toJson().toString())
+    }
+}
+
+private fun loadFieldDataCache(context: Context, userId: Int): CachedFieldData? {
+    return runCatching {
+        val file = File(context.filesDir, fieldDataCacheFile(userId))
         if (!file.exists()) {
             return null
         }
 
         cachedFieldDataFromJson(JSONObject(file.readText()))
     }.getOrNull()
+}
+
+private fun AppSession.toJson(): JSONObject {
+    return JSONObject()
+        .put("user_id", userId)
+        .put("token", token)
+        .put("user_name", userName)
+        .put("role", role)
+        .putNullable("personal_id", personalId)
+        .put("allowed_types", JSONArray().also { array -> allowedTypes.forEach { array.put(it.toJson()) } })
+}
+
+private fun appSessionFromJson(json: JSONObject): AppSession {
+    return AppSession(
+        userId = json.getInt("user_id"),
+        token = json.optString("token"),
+        userName = json.optString("user_name", "Usuario"),
+        role = json.optString("role", "APP_HOROMETROS"),
+        personalId = json.nullableInt("personal_id"),
+        allowedTypes = json.optJSONArray("allowed_types").orEmptyArray().mapJsonObjects(::registrationTypeFromCacheJson),
+    )
 }
 
 private fun CachedFieldData.toJson(): JSONObject {
@@ -701,6 +834,7 @@ private fun CachedFieldData.toJson(): JSONObject {
         .put("sectores", JSONArray().also { array -> data.sectores.forEach { array.put(it.toJson()) } })
         .put("lotes", JSONArray().also { array -> data.lotes.forEach { array.put(it.toJson()) } })
         .put("config", data.config.toJson())
+        .put("registration_types", JSONArray().also { array -> data.registrationTypes.forEach { array.put(it.toJson()) } })
 }
 
 private fun cachedFieldDataFromJson(json: JSONObject): CachedFieldData {
@@ -714,13 +848,14 @@ private fun cachedFieldDataFromJson(json: JSONObject): CachedFieldData {
             sectores = json.optJSONArray("sectores").orEmptyArray().mapJsonObjects(::locationFromCacheJson),
             lotes = json.optJSONArray("lotes").orEmptyArray().mapJsonObjects(::locationFromCacheJson),
             config = json.optJSONObject("config")?.let(::configFromCacheJson) ?: HourmeterConfig.DEFAULT,
+            registrationTypes = json.optJSONArray("registration_types").orEmptyArray().mapJsonObjects(::registrationTypeFromCacheJson),
         ),
     )
 }
 
-private fun saveLocalRecords(context: Context, records: List<LocalHourmeterRecord>) {
+private fun saveLocalRecords(context: Context, userId: Int, records: List<LocalHourmeterRecord>) {
     val payload = JSONArray().also { array -> records.forEach { array.put(it.toJson()) } }
-    val file = android.util.AtomicFile(File(context.filesDir, LOCAL_RECORDS_CACHE_FILE))
+    val file = android.util.AtomicFile(File(context.filesDir, localRecordsCacheFile(userId)))
     val stream = file.startWrite()
     try {
         stream.write(payload.toString().toByteArray(Charsets.UTF_8))
@@ -731,9 +866,9 @@ private fun saveLocalRecords(context: Context, records: List<LocalHourmeterRecor
     }
 }
 
-private fun loadLocalRecords(context: Context): List<LocalHourmeterRecord> {
+private fun loadLocalRecords(context: Context, userId: Int): List<LocalHourmeterRecord> {
     return runCatching {
-        val file = File(context.filesDir, LOCAL_RECORDS_CACHE_FILE)
+        val file = File(context.filesDir, localRecordsCacheFile(userId))
         if (!file.exists()) {
             return emptyList()
         }
@@ -744,11 +879,16 @@ private fun loadLocalRecords(context: Context): List<LocalHourmeterRecord> {
 
 private fun JSONArray?.orEmptyArray(): JSONArray = this ?: JSONArray()
 
+private fun JSONArray.mapStrings(): List<String> {
+    return (0 until length()).mapNotNull { index -> optString(index).takeIf { it.isNotBlank() } }
+}
+
 private fun Vehicle.toJson(): JSONObject {
     return JSONObject()
         .put("id", id)
         .put("code", code)
         .put("name", name)
+        .putNullable("type_id", typeId)
         .put("type_name", typeName)
         .putNullable("sede_id", sedeId)
         .putNullable("last_valid", lastValid)
@@ -765,6 +905,7 @@ private fun vehicleFromCacheJson(json: JSONObject): Vehicle {
         id = json.getInt("id"),
         code = json.optString("code"),
         name = json.optString("name"),
+        typeId = json.nullableInt("type_id"),
         typeName = json.optString("type_name"),
         sedeId = json.nullableInt("sede_id"),
         lastValid = json.nullableString("last_valid"),
@@ -847,6 +988,10 @@ private fun HourmeterConfig.toJson(): JSONObject {
         .put("require_photo", requirePhoto)
         .put("reopening_minutes", reopeningMinutes)
         .put("ocr_enabled", ocrEnabled)
+        .put("required_sede", requiredSede)
+        .put("required_operator", requiredOperator)
+        .put("required_photo_evidence", requiredPhotoEvidence)
+        .put("operator_types", JSONArray().also { array -> operatorTypes.forEach { item -> array.put(item) } })
 }
 
 private fun configFromCacheJson(json: JSONObject): HourmeterConfig {
@@ -860,6 +1005,10 @@ private fun configFromCacheJson(json: JSONObject): HourmeterConfig {
         requirePhoto = json.optBoolean("require_photo", true),
         reopeningMinutes = json.optInt("reopening_minutes", 120),
         ocrEnabled = json.optBoolean("ocr_enabled", true),
+        requiredSede = json.optBoolean("required_sede", true),
+        requiredOperator = json.optBoolean("required_operator", true),
+        requiredPhotoEvidence = json.optBoolean("required_photo_evidence", true),
+        operatorTypes = json.optJSONArray("operator_types").orEmptyArray().mapStrings(),
     )
 }
 
@@ -927,15 +1076,20 @@ private fun JSONObject.nullableInt(key: String): Int? {
 }
 
 private fun Vehicle.matchesType(type: RegistrationType): Boolean {
-    val isTractor = typeName.contains("tractor", ignoreCase = true) ||
-        name.contains("tractor", ignoreCase = true) ||
-        code.startsWith("TR", ignoreCase = true)
-    val isHeavy = typeName.contains("maquinaria pesada", ignoreCase = true) ||
-        code.startsWith("MP", ignoreCase = true)
+    if (type.id != null) {
+        return typeId == type.id
+    }
 
-    return when (type) {
-        RegistrationType.TRACTORS -> isTractor
-        RegistrationType.HEAVY -> isHeavy
+    return typeName.equals(type.title, ignoreCase = true)
+}
+
+private fun iconForRegistrationType(type: RegistrationType): ImageVector {
+    val label = type.title.lowercase()
+
+    return when {
+        label.contains("tractor") -> Icons.Filled.Agriculture
+        label.contains("maquinaria") || label.contains("excavadora") || label.contains("pesada") -> Icons.Filled.Construction
+        else -> Icons.Filled.Speed
     }
 }
 
@@ -958,7 +1112,6 @@ fun HorometroApp() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var session by remember { mutableStateOf<AppSession?>(null) }
-    var syncSession by remember { mutableStateOf<AppSession?>(null) }
     var selectedType by remember { mutableStateOf<RegistrationType?>(null) }
     var cachedData by remember { mutableStateOf<CachedFieldData?>(null) }
     var syncLoading by remember { mutableStateOf(false) }
@@ -967,24 +1120,38 @@ fun HorometroApp() {
     val api = remember { AgroControlApi(DEFAULT_API_URL.trimEnd('/')) }
 
     LaunchedEffect(Unit) {
-        cachedData = loadFieldDataCache(context)
+        val stored = loadAppSession(context)
+        if (stored != null) {
+            session = stored
+            cachedData = loadFieldDataCache(context, stored.userId)
+            val types = cachedData?.data?.registrationTypes?.ifEmpty { stored.allowedTypes } ?: stored.allowedTypes
+            if (types.size == 1) {
+                selectedType = types.first()
+            }
+        }
     }
 
-    fun syncMasters() {
+    fun syncMasters(currentSession: AppSession? = session) {
+        if (currentSession == null) {
+            syncError = "Ingresa al aplicativo para sincronizar datos."
+            return
+        }
         syncLoading = true
         syncProgress = 0
         syncError = null
         scope.launch {
             runCatching {
-                val syncSession = api.login(DEFAULT_RESPONSIBLE_USER, DEFAULT_RESPONSIBLE_PASSWORD)
                 syncProgress = 8
-                val data = api.fieldData(syncSession.token) { progress -> syncProgress = progress }
+                val data = api.fieldData(currentSession.token) { progress -> syncProgress = progress }
                 val cached = CachedFieldData(data = data, syncedAt = currentDateTime())
-                saveFieldDataCache(context, cached)
-                syncSession to cached
-            }.onSuccess { (newSyncSession, cached) ->
-                syncSession = newSyncSession
+                saveFieldDataCache(context, currentSession.userId, cached)
+                cached
+            }.onSuccess { cached ->
                 cachedData = cached
+                val types = cached.data.registrationTypes.ifEmpty { currentSession.allowedTypes }
+                if (types.size == 1) {
+                    selectedType = types.first()
+                }
             }.onFailure {
                 syncError = it.message ?: "No se pudo sincronizar datos."
             }
@@ -995,75 +1162,80 @@ fun HorometroApp() {
         }
     }
 
+    val availableTypes = (cachedData?.data?.registrationTypes ?: emptyList()).ifEmpty { session?.allowedTypes ?: emptyList() }
+
     when {
+        session == null -> ResponsibleLoginScreen(
+            title = "AgroCalera Taller",
+            subtitle = "Ingreso al aplicativo",
+            formTitle = "Ingreso seguro",
+            formSubtitle = "Usa tu usuario asignado para registrar horómetros.",
+            infoText = "Tus permisos definen qué tipos de registro puedes ver y capturar.",
+            showBack = false,
+            onLogin = { usuario, password -> api.login(usuario, password) },
+            onLoggedIn = {
+                session = it
+                saveAppSession(context, it)
+                cachedData = loadFieldDataCache(context, it.userId)
+                selectedType = null
+                syncMasters(it)
+            },
+            onBack = {},
+        )
+
         selectedType == null -> VehicleTypeSelectionScreen(
             hasLocalData = cachedData != null,
             lastSync = cachedData?.syncedAt,
             syncing = syncLoading,
             syncProgress = syncProgress,
             syncError = syncError,
-            onSync = ::syncMasters,
-            onTractors = {
+            types = availableTypes,
+            onSync = { syncMasters() },
+            onSelect = { type ->
                 if (cachedData == null) {
-                    syncError = "Sincroniza los datos antes de registrar tractores."
+                    syncError = "Sincroniza los datos antes de ingresar."
                 } else {
-                    selectedType = RegistrationType.TRACTORS
+                    selectedType = type
                 }
             },
-            onHeavy = {
-                if (cachedData == null) {
-                    syncError = "Sincroniza los datos antes de registrar maquinaria pesada."
-                } else {
-                    selectedType = RegistrationType.HEAVY
-                }
-            },
-        )
-
-        selectedType == RegistrationType.HEAVY && session == null -> ResponsibleLoginScreen(
-            onLogin = { usuario, password -> api.login(usuario, password) },
-            onLoggedIn = { session = it },
-            onBack = { selectedType = null },
-        )
-
-        selectedType == RegistrationType.TRACTORS && cachedData != null -> FieldHomeScreen(
-            api = api,
-            session = AppSession(token = syncSession?.token.orEmpty(), userName = "Registro directo", role = "OPERACION"),
-            registrationType = RegistrationType.TRACTORS,
-            initialData = cachedData!!.data,
-            onDataSynced = { data ->
-                val cached = CachedFieldData(data = data, syncedAt = currentDateTime())
-                cachedData = cached
-                saveFieldDataCache(context, cached)
-            },
             onBack = {
+                clearAppSession(context)
                 session = null
                 selectedType = null
+                cachedData = null
             },
             onLogout = {
+                clearAppSession(context)
                 session = null
                 selectedType = null
+                cachedData = null
             },
         )
 
-        session != null && selectedType != null -> FieldHomeScreen(
-            api = api,
-            session = session!!,
-            registrationType = selectedType!!,
-            initialData = cachedData?.data ?: FieldData.EMPTY,
-            onDataSynced = { data ->
-                val cached = CachedFieldData(data = data, syncedAt = currentDateTime())
-                cachedData = cached
-                saveFieldDataCache(context, cached)
-            },
-            onBack = {
-                session = null
-                selectedType = null
-            },
-            onLogout = {
-                session = null
-                selectedType = null
-            },
-        )
+        session != null && selectedType != null -> {
+            val activeSession = session!!
+
+            FieldHomeScreen(
+                api = api,
+                session = activeSession,
+                registrationType = selectedType!!,
+                initialData = cachedData?.data ?: FieldData.EMPTY,
+                onDataSynced = { data ->
+                    val cached = CachedFieldData(data = data, syncedAt = currentDateTime())
+                    cachedData = cached
+                    saveFieldDataCache(context, activeSession.userId, cached)
+                },
+                onBack = {
+                    selectedType = null
+                },
+                onLogout = {
+                    clearAppSession(context)
+                    session = null
+                    selectedType = null
+                    cachedData = null
+                },
+            )
+        }
     }
 }
 
@@ -1074,115 +1246,117 @@ fun VehicleTypeSelectionScreen(
     syncing: Boolean,
     syncProgress: Int,
     syncError: String?,
+    types: List<RegistrationType>,
     onSync: () -> Unit,
-    onTractors: () -> Unit,
-    onHeavy: () -> Unit,
+    onSelect: (RegistrationType) -> Unit,
+    onBack: () -> Unit,
+    onLogout: () -> Unit,
 ) {
+    BackHandler(onBack = onBack)
+
     Scaffold(
         containerColor = AppBackground,
-        bottomBar = {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(AppBackground)
-                    .navigationBarsPadding()
-                    .padding(horizontal = 18.dp, vertical = 14.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                if (!hasLocalData) {
-                    Text("Sincroniza datos antes de ingresar al formulario.", color = AppMuted, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall)
-                }
-                InfoLine("Inicio 7:00 a 8:00 a. m.  Cierre maximo 7:30 p. m.", compact = true)
-            }
-        },
+        contentWindowInsets = WindowInsets(0.dp),
     ) { innerPadding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .statusBarsPadding()
-                .padding(horizontal = 18.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(18.dp),
+                .verticalScroll(rememberScrollState())
+                .navigationBarsPadding(),
         ) {
             AppLogoHeader()
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(
-                    "Que vas a registrar?",
-                    style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.Black,
-                    color = AppText,
-                )
-                Text(
-                    "Elige el flujo correcto para iniciar la captura.",
-                    color = AppMuted,
-                    fontWeight = FontWeight.SemiBold,
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-            }
-            VehicleOptionCard(
-                title = RegistrationType.TRACTORS.title,
-                subtitle = "Sede, tractor, operario y foto",
-                icon = Icons.Filled.Agriculture,
-                selected = false,
-                onClick = onTractors,
-            )
-            VehicleOptionCard(
-                title = RegistrationType.HEAVY.title,
-                subtitle = "Login de responsable y equipo",
-                icon = Icons.Filled.Construction,
-                selected = false,
-                onClick = onHeavy,
-            )
-            Button(
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(50.dp),
-                enabled = !syncing,
-                colors = ButtonDefaults.buttonColors(containerColor = if (hasLocalData) AppGreenDark else AppGreen),
-                shape = RoundedCornerShape(16.dp),
-                onClick = onSync,
+                    .padding(horizontal = 18.dp, vertical = 18.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
-                if (syncing) {
-                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = Color.White)
-                } else {
-                    Icon(Icons.Filled.Refresh, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("Sincronizar", fontWeight = FontWeight.Black)
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        "¿Qué vas a registrar?",
+                        style = MaterialTheme.typography.headlineMedium,
+                        fontWeight = FontWeight.Black,
+                        color = AppText,
+                    )
+                    Text(
+                        "Elige el flujo correcto para iniciar la captura.",
+                        color = AppMuted,
+                        fontWeight = FontWeight.SemiBold,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
                 }
+                types.forEach { type ->
+                    VehicleOptionCard(
+                        title = type.title,
+                        subtitle = type.subtitle,
+                        icon = iconForRegistrationType(type),
+                        selected = false,
+                        onClick = { onSelect(type) },
+                    )
+                }
+                if (types.isEmpty()) {
+                    ErrorBox("No tienes tipos de registro asignados. Solicita acceso en Usuarios aplicativo.")
+                }
+                Button(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(56.dp),
+                    enabled = !syncing,
+                    colors = ButtonDefaults.buttonColors(containerColor = if (hasLocalData) AppGreenDark else AppGreen),
+                    shape = RoundedCornerShape(18.dp),
+                    onClick = onSync,
+                ) {
+                    if (syncing) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = Color.White)
+                    } else {
+                        Icon(Icons.Filled.Refresh, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Sincronizar", fontWeight = FontWeight.Black)
+                    }
+                }
+                val syncLabel = lastSync?.let { "Ultima sincronizacion: ${displayDateTime(it)}" }
+                    ?: "Sin datos locales sincronizados."
+                InfoLine(syncLabel, compact = true)
+                InfoLine("Inicio 7:00 a 8:00 a. m.  Cierre maximo 7:30 p. m.", compact = true)
+                if (!hasLocalData) {
+                    Text("Sincroniza datos antes de ingresar al formulario.", color = AppMuted, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall)
+                }
+                if (syncError != null) {
+                    ErrorBox(syncError)
+                }
+                if (syncing) {
+                    ProgressBox("Sincronizando datos", syncProgress)
+                }
+                TextButton(onClick = onLogout, modifier = Modifier.align(Alignment.CenterHorizontally)) {
+                    Text("Cerrar sesión", color = AppGreenDark, fontWeight = FontWeight.Black)
+                }
+                Spacer(Modifier.weight(1f))
             }
-            val syncLabel = lastSync?.let { "Ultima sincronizacion: ${displayDateTime(it)}" }
-                ?: "Sin datos locales sincronizados."
-            InfoLine(syncLabel, compact = true)
-            if (syncError != null) {
-                ErrorBox(syncError)
-            }
-            if (syncing) {
-                ProgressBox("Sincronizando datos", syncProgress)
-            }
-            Spacer(Modifier.weight(1f))
         }
     }
 }
 
 @Composable
 fun AppLogoHeader() {
-    Row(
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(22.dp))
+            .height(220.dp)
+            .clip(RoundedCornerShape(bottomStart = 26.dp, bottomEnd = 26.dp))
             .background(AppHeaderGreen)
-            .padding(horizontal = 14.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
+            .statusBarsPadding()
+            .padding(horizontal = 26.dp, vertical = 24.dp),
+        contentAlignment = Alignment.CenterStart,
     ) {
         Image(
-            painter = painterResource(id = R.drawable.logo_encabezado),
-            contentDescription = "AgroControl Horometros",
+            painter = painterResource(id = R.drawable.logos_taller),
+            contentDescription = "AgroCalera Taller",
             modifier = Modifier
-                .height(56.dp)
-                .weight(1f),
+                .fillMaxWidth()
+                .height(112.dp),
             contentScale = ContentScale.Fit,
             alignment = Alignment.CenterStart,
-            colorFilter = ColorFilter.tint(Color.White),
         )
     }
 }
@@ -1192,9 +1366,9 @@ fun SimpleTopBar(title: String, subtitle: String, onBack: (() -> Unit)? = null, 
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(22.dp))
             .background(AppHeaderGreen)
-            .padding(horizontal = 12.dp, vertical = 10.dp),
+            .statusBarsPadding()
+            .padding(horizontal = 12.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (onBack != null) {
@@ -1227,6 +1401,12 @@ fun SimpleTopBar(title: String, subtitle: String, onBack: (() -> Unit)? = null, 
 
 @Composable
 fun ResponsibleLoginScreen(
+    title: String = "AgroCalera Taller",
+    subtitle: String = "Ingreso al aplicativo",
+    formTitle: String = "Ingreso seguro",
+    formSubtitle: String = "Usa tu usuario asignado para registrar horómetros.",
+    infoText: String = "Tus permisos definen qué tipos de registro puedes ver y capturar.",
+    showBack: Boolean = true,
     onLogin: suspend (String, String) -> AppSession,
     onLoggedIn: (AppSession) -> Unit,
     onBack: () -> Unit,
@@ -1243,22 +1423,24 @@ fun ResponsibleLoginScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(AppBackground)
-            .statusBarsPadding()
             .navigationBarsPadding()
             .imePadding()
-            .verticalScroll(rememberScrollState())
-            .padding(18.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+            .verticalScroll(rememberScrollState()),
     ) {
         SimpleTopBar(
-            title = "Maquinaria pesada",
-            subtitle = "Ingreso del responsable",
-            onBack = onBack,
+            title = title,
+            subtitle = subtitle,
+            onBack = if (showBack) onBack else null,
         )
-        Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 18.dp, vertical = 18.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
             FormTitle(
-                title = "Ingreso seguro",
-                subtitle = "Solo para registro de maquinaria pesada.",
+                title = formTitle,
+                subtitle = formSubtitle,
                 icon = Icons.Filled.Lock,
             )
             Card(
@@ -1308,58 +1490,7 @@ fun ResponsibleLoginScreen(
                     }
                 }
             }
-            InfoLine("El responsable quedara asociado a todos los registros realizados hoy.")
-        }
-    }
-}
-
-@Composable
-fun AutoLoginScreen(
-    onLogin: suspend () -> AppSession,
-    onLoggedIn: (AppSession) -> Unit,
-    onBack: () -> Unit,
-) {
-    val scope = rememberCoroutineScope()
-    var error by remember { mutableStateOf<String?>(null) }
-
-    BackHandler(onBack = onBack)
-
-    LaunchedEffect(Unit) {
-        runCatching { onLogin() }
-            .onSuccess(onLoggedIn)
-            .onFailure { error = it.message ?: "No se pudo preparar el registro directo." }
-    }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(AppBackground)
-            .statusBarsPadding()
-            .navigationBarsPadding()
-            .padding(24.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        CircularProgressIndicator(color = AppGreen)
-        Spacer(Modifier.height(16.dp))
-        Text("Preparando registro de tractores", fontWeight = FontWeight.Black, color = AppGreenDark)
-        Text("No se requiere login del operario.", color = AppMuted, fontWeight = FontWeight.SemiBold)
-        if (error != null) {
-            Spacer(Modifier.height(16.dp))
-            ErrorBox(error!!)
-            TextButton(onClick = {
-                error = null
-                scope.launch {
-                    runCatching { onLogin() }
-                        .onSuccess(onLoggedIn)
-                        .onFailure { error = it.message ?: "No se pudo preparar el registro directo." }
-                }
-            }) {
-                Text("Reintentar", color = Color(0xFF166534), fontWeight = FontWeight.Black)
-            }
-            TextButton(onClick = onBack) {
-                Text("Volver", color = Color(0xFF166534), fontWeight = FontWeight.Black)
-            }
+            InfoLine(infoText)
         }
     }
 }
@@ -1385,10 +1516,10 @@ fun FieldHomeScreen(
     var sendProgress by remember { mutableStateOf<Int?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var success by remember { mutableStateOf<String?>(null) }
-    var localRecords by remember { mutableStateOf(loadLocalRecords(context)) }
+    var localRecords by remember(session.userId) { mutableStateOf(loadLocalRecords(context, session.userId)) }
 
     fun persistLocal(records: List<LocalHourmeterRecord>) {
-        saveLocalRecords(context, records)
+        saveLocalRecords(context, session.userId, records)
         localRecords = records
     }
 
@@ -1405,16 +1536,7 @@ fun FieldHomeScreen(
         sendProgress = 0
         error = null
         scope.launch {
-            val token = if (session.token.isNotBlank()) {
-                session.token
-            } else {
-                runCatching { api.login(DEFAULT_RESPONSIBLE_USER, DEFAULT_RESPONSIBLE_PASSWORD).token }
-                    .getOrElse {
-                        error = it.message ?: "No se pudo iniciar sesion para enviar pendientes."
-                        sendProgress = null
-                        return@launch
-                    }
-            }
+            val token = session.token
             val blockedVehicles = mutableSetOf<Int>()
             queue.forEachIndexed { index, local ->
                 if (local.vehicleId in blockedVehicles) return@forEachIndexed
@@ -1486,24 +1608,23 @@ fun FieldHomeScreen(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(AppBackground)
-                    .statusBarsPadding()
-                    .padding(horizontal = 16.dp, vertical = 10.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+                    .background(AppHeaderGreen)
+                    .padding(top = 6.dp),
+                verticalArrangement = Arrangement.spacedBy(0.dp),
             ) {
                 SimpleTopBar(
                     title = registrationType.title,
-                    subtitle = if (registrationType == RegistrationType.TRACTORS) "Registro directo" else session.userName,
+                    subtitle = session.userName,
                     onBack = onBack,
                     onLogout = onLogout,
                 )
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(Color(0xFFE8EEF2))
-                        .padding(4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        .clip(RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp))
+                        .background(AppBackground)
+                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     TabButton("Inicio", tab == FieldTab.Start, Modifier.weight(1f)) { tab = FieldTab.Start }
                     TabButton("Cierre", tab == FieldTab.Close, Modifier.weight(1f)) { tab = FieldTab.Close }
@@ -1517,7 +1638,7 @@ fun FieldHomeScreen(
                 .fillMaxSize()
                 .background(AppBackground)
                 .padding(innerPadding)
-                .padding(horizontal = 16.dp, vertical = 10.dp),
+                .padding(horizontal = 16.dp, vertical = 8.dp),
         ) {
             if (success != null) {
                 SuccessBox(success!!)
@@ -1551,7 +1672,7 @@ fun FieldHomeScreen(
                         vehicles = vehicles,
                         operators = operators,
                         localRecords = localRecords,
-                        config = initialData.config,
+                        config = registrationType.config,
                         onCancel = onBack,
                         onRegister = { vehicleId, operatorId, fundoId, sectorId, loteId, confirmed, ocr, manualCorrection, dateTime, photoPath ->
                             val selectedOperator = operators.firstOrNull { it.id == operatorId }
@@ -1618,6 +1739,7 @@ fun FieldHomeScreen(
                     FieldTab.History -> HistoryScreen(
                         serverPending = pending,
                         localRecords = localRecords,
+                        vehicles = vehicles,
                         onSendPending = { sendPendingLocal() },
                     )
                 }
@@ -1712,18 +1834,55 @@ fun ProgressBox(title: String, progress: Int) {
 fun HistoryScreen(
     serverPending: List<HourmeterRecord>,
     localRecords: List<LocalHourmeterRecord>,
+    vehicles: List<Vehicle>,
     onSendPending: () -> Unit,
 ) {
-    val pendingSend = localRecords.any { it.status == "PENDIENTE_ENVIO" || it.status == "PENDIENTE_ENVIO_CIERRE" }
-    val localServerIds = localRecords.mapNotNull { it.serverId }.toSet()
+    val currentVehicleIds = remember(vehicles) { vehicles.map { it.id }.toSet() }
+    val visibleLocalRecords = remember(localRecords, currentVehicleIds) {
+        localRecords.filter { it.vehicleId in currentVehicleIds }
+    }
+    val pendingSend = visibleLocalRecords.any { it.status == "PENDIENTE_ENVIO" || it.status == "PENDIENTE_ENVIO_CIERRE" }
+    val localServerIds = visibleLocalRecords.mapNotNull { it.serverId }.toSet()
     val visibleServerPending = serverPending.filterNot { it.id in localServerIds }
+    var filter by remember { mutableStateOf("Todos") }
+    val filteredLocalRecords = remember(visibleLocalRecords, filter) {
+        when (filter) {
+            "Abiertos" -> visibleLocalRecords.filter { it.finalConfirmed.isNullOrBlank() }
+            "Cerrados" -> visibleLocalRecords.filter { !it.finalConfirmed.isNullOrBlank() || it.status == "CERRADO" }
+            else -> visibleLocalRecords
+        }
+    }
+    val filteredServerPending = remember(visibleServerPending, filter) {
+        if (filter == "Cerrados") emptyList() else visibleServerPending
+    }
+    val localByDate = remember(filteredLocalRecords) {
+        filteredLocalRecords
+            .sortedByDescending { it.startDateTime }
+            .groupBy { historyDateKey(it.startDateTime) }
+    }
+    val serverByDate = remember(filteredServerPending) {
+        filteredServerPending
+            .sortedByDescending { it.date }
+            .groupBy { historyDateKey(it.date) }
+    }
+    val groupedDates = remember(localByDate, serverByDate) {
+        (localByDate.keys + serverByDate.keys)
+            .filter { it.isNotBlank() }
+            .distinct()
+            .sortedDescending()
+    }
 
     Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         FormTitle(
             title = "Registros",
-            subtitle = "${localRecords.size + visibleServerPending.size} movimientos guardados en el equipo.",
+            subtitle = "${visibleLocalRecords.size + visibleServerPending.size} movimientos guardados en el equipo.",
             icon = Icons.Filled.Speed,
         )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            HistoryFilterChip("Todos", filter == "Todos") { filter = "Todos" }
+            HistoryFilterChip("Abiertos", filter == "Abiertos") { filter = "Abiertos" }
+            HistoryFilterChip("Cerrados", filter == "Cerrados") { filter = "Cerrados" }
+        }
         if (pendingSend) {
             Button(
                 modifier = Modifier
@@ -1742,13 +1901,18 @@ fun HistoryScreen(
             modifier = Modifier.weight(1f),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            lazyItems(localRecords.sortedByDescending { it.startDateTime }, key = { it.localId }) { record ->
-                LocalHistoryCard(record)
+            groupedDates.forEach { dateKey ->
+                item(key = "date-$dateKey") {
+                    HistoryDateHeader(historyDateTitle(dateKey))
+                }
+                lazyItems(localByDate[dateKey].orEmpty(), key = { it.localId }) { record ->
+                    LocalHistoryCard(record)
+                }
+                lazyItems(serverByDate[dateKey].orEmpty(), key = { "server-${it.id}" }) { record ->
+                    ServerHistoryCard(record)
+                }
             }
-            lazyItems(visibleServerPending, key = { "server-${it.id}" }) { record ->
-                ServerHistoryCard(record)
-            }
-            if (localRecords.isEmpty() && visibleServerPending.isEmpty()) {
+            if (groupedDates.isEmpty()) {
                 item {
                     Card(shape = RoundedCornerShape(22.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
                         Row(
@@ -1763,6 +1927,34 @@ fun HistoryScreen(
                 }
             }
         }
+    }
+}
+
+@Composable
+fun HistoryDateHeader(label: String) {
+    Text(
+        text = label,
+        color = AppText,
+        fontWeight = FontWeight.Black,
+        style = MaterialTheme.typography.titleSmall,
+        modifier = Modifier.padding(top = 4.dp, start = 2.dp),
+    )
+}
+
+@Composable
+fun HistoryFilterChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    Button(
+        modifier = Modifier.height(38.dp),
+        shape = RoundedCornerShape(99.dp),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = if (selected) AppGreen else Color(0xFFEFF4F2),
+            contentColor = if (selected) Color.White else AppText,
+        ),
+        elevation = ButtonDefaults.buttonElevation(defaultElevation = 0.dp),
+        contentPadding = PaddingValues(horizontal = 16.dp),
+        onClick = onClick,
+    ) {
+        Text(label, fontWeight = FontWeight.Black, style = MaterialTheme.typography.bodySmall)
     }
 }
 
@@ -1797,6 +1989,7 @@ fun LocalHistoryCard(record: LocalHourmeterRecord) {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 ReadingBox("Inicial", record.initialConfirmed, Modifier.weight(1f))
                 ReadingBox("Final", record.finalConfirmed ?: "-", Modifier.weight(1f))
+                ReadingBox("Horas", workedHours(record.initialConfirmed, record.finalConfirmed), Modifier.weight(1f))
             }
         }
     }
@@ -1833,8 +2026,20 @@ fun ServerHistoryCard(record: HourmeterRecord) {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 ReadingBox("Inicial", record.initial ?: "-", Modifier.weight(1f))
                 ReadingBox("Final", record.final ?: "-", Modifier.weight(1f))
+                ReadingBox("Horas", record.hours ?: "-", Modifier.weight(1f))
             }
         }
+    }
+}
+
+private fun workedHours(initial: String?, final: String?): String {
+    val start = initial?.toBigDecimalOrNull()
+    val end = final?.toBigDecimalOrNull()
+
+    return if (start != null && end != null) {
+        "${end.subtract(start).max(java.math.BigDecimal.ZERO).stripTrailingZeros().toPlainString()} h"
+    } else {
+        "-"
     }
 }
 
@@ -1852,21 +2057,25 @@ private fun readableLocalStatus(status: String): String {
 @Composable
 fun FormTitle(title: String, subtitle: String, icon: ImageVector) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
+            .background(Color(0xFFEAF7ED))
+            .padding(12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
             modifier = Modifier
-                .size(46.dp)
+                .size(52.dp)
                 .clip(RoundedCornerShape(15.dp))
-                .background(AppGreenSoft),
+                .background(Color(0xFFD9F2E1)),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(icon, contentDescription = null, tint = AppGreen, modifier = Modifier.size(25.dp))
+            Icon(icon, contentDescription = null, tint = AppGreen, modifier = Modifier.size(28.dp))
         }
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black, color = AppText)
+            Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black, color = AppText, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(subtitle, color = AppMuted, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall)
         }
     }
@@ -1902,7 +2111,7 @@ fun StartScreen(
 ) {
     var sedeId by remember { mutableStateOf<Int?>(null) }
     var vehicleId by remember { mutableStateOf<Int?>(null) }
-    var operatorId by remember { mutableStateOf<Int?>(null) }
+    var operatorId by remember(operators) { mutableStateOf(operators.singleOrNull()?.id) }
     var reading by remember { mutableStateOf("") }
     var photo by remember { mutableStateOf<String?>(null) }
     var showCamera by remember { mutableStateOf(false) }
@@ -1915,14 +2124,12 @@ fun StartScreen(
     }
     val filtered = remember(vehicles, sedeId) { vehicles.filter { sedeId != null && it.sedeId == sedeId } }
     val selected = filtered.firstOrNull { it.id == vehicleId }
-    val availableOperators = remember(operators, registrationType) {
-        operators.filter {
-            when (registrationType) {
-                RegistrationType.HEAVY -> it.type.equals("MAQUINISTA", ignoreCase = true)
-                RegistrationType.TRACTORS -> it.type.equals("TRACTORISTA", ignoreCase = true) ||
-                    it.type.equals("OPERARIO", ignoreCase = true) ||
-                    it.type.equals("CONDUCTOR", ignoreCase = true)
-            }
+    val availableOperators = remember(operators, registrationType.config.operatorTypes) {
+        val allowed = registrationType.config.operatorTypes.map { it.uppercase() }.toSet()
+        if (allowed.isEmpty()) {
+            operators
+        } else {
+            operators.filter { it.type.uppercase() in allowed }
         }
     }
     val selectedOperator = availableOperators.firstOrNull { it.id == operatorId }
@@ -1931,8 +2138,9 @@ fun StartScreen(
         .filter { it > java.math.BigDecimal.ZERO }
     val reference = (localValues + listOfNotNull(selected?.lastValid?.toBigDecimalOrNull()?.takeIf { it > java.math.BigDecimal.ZERO })).maxOrNull()?.toPlainString()
     val validation = readingError(reading, reference, true, config.startToleranceHours)
-    val vehicleLabel = if (registrationType == RegistrationType.TRACTORS) "Tractor" else "Vehiculo"
-    val photoRequired = registrationType == RegistrationType.TRACTORS
+    val vehicleLabel = registrationType.title
+    val photoRequired = registrationType.config.requirePhoto && registrationType.config.requiredPhotoEvidence
+    val operatorRequired = registrationType.config.requiredOperator
     BackHandler { onCancel() }
     Column(
         Modifier
@@ -1947,38 +2155,40 @@ fun StartScreen(
             label = "Sede", placeholder = "Selecciona una sede",
             selectedLabel = sedes.firstOrNull { it.id == sedeId }?.name,
             items = sedes, icon = Icons.Filled.Map, itemLabel = { it.name },
-            onSelected = { sedeId = it.id; vehicleId = null; operatorId = null; reading = ""; photo = null },
+            onSelected = { sedeId = it.id; vehicleId = null; operatorId = availableOperators.singleOrNull()?.id; reading = ""; photo = null },
         )
         SimpleDropdownField(
             label = vehicleLabel, placeholder = "Selecciona un equipo",
             selectedLabel = selected?.let { "${it.code} - ${it.name}" },
             items = filtered, enabled = sedeId != null,
             icon = Icons.Filled.Agriculture, itemLabel = { "${it.code} - ${it.name}" },
-            onSelected = { vehicleId = it.id; operatorId = null; reading = ""; photo = null; message = null },
+            onSelected = { vehicleId = it.id; reading = ""; photo = null; message = null },
             trailingAction = {
                 IconButton(enabled = sedeId != null, onClick = { showQr = true }) {
                     Icon(Icons.Filled.QrCodeScanner, contentDescription = "Escanear QR")
                 }
             },
         )
-        SimpleDropdownField(
-            label = "Operario",
-            placeholder = if (registrationType == RegistrationType.HEAVY) "Selecciona maquinista" else "Selecciona conductor",
-            selectedLabel = selectedOperator?.let { "${it.dni} - ${it.fullName}" },
-            items = availableOperators,
-            enabled = selected != null,
-            icon = Icons.Filled.Badge,
-            itemLabel = { "${it.dni} - ${it.fullName}" },
-            onSelected = { operatorId = it.id },
-            emptyText = if (registrationType == RegistrationType.HEAVY) "No hay maquinistas sincronizados" else "No hay conductores sincronizados",
-            searchable = true,
-        )
+        if (operatorRequired) {
+            SimpleDropdownField(
+                label = "Operario",
+                placeholder = "Selecciona conductor / responsable",
+                selectedLabel = selectedOperator?.let { "${it.dni} - ${it.fullName}" },
+                items = availableOperators,
+                enabled = selected != null,
+                icon = Icons.Filled.Badge,
+                itemLabel = { "${it.dni} - ${it.fullName}" },
+                onSelected = { operatorId = it.id },
+                emptyText = "No hay personal sincronizado para este usuario",
+                searchable = true,
+            )
+        }
         if (selected != null) {
             if (!selected.referenceSynced) {
                 ErrorBox("Sincroniza los maestros para obtener la referencia del equipo.")
             } else {
                 InfoLine(reference?.let { "Ultimo horometro valido: $it" } ?: "Sin base. Esta lectura sera la primera referencia.", compact = true)
-                AppTextField("Horometro", reading, { reading = it }, KeyboardType.Decimal)
+                AppTextField("Horometro actual", reading, { reading = it }, KeyboardType.Decimal, suffixText = "h")
                 if (reading.isNotBlank() && validation != null) ErrorBox(validation)
                 OutlinedButton(onClick = { showCamera = true }, enabled = validation == null, modifier = Modifier.fillMaxWidth()) {
                     Icon(Icons.Filled.CameraAlt, contentDescription = null)
@@ -1990,7 +2200,7 @@ fun StartScreen(
         }
         message?.let { ErrorBox(it) }
         Button(
-            enabled = selected?.referenceSynced == true && operatorId != null && validation == null && reading.isNotBlank() && (!photoRequired || photo != null),
+            enabled = selected?.referenceSynced == true && (!operatorRequired || operatorId != null) && validation == null && reading.isNotBlank() && (!photoRequired || photo != null),
             modifier = Modifier.fillMaxWidth().height(50.dp),
             onClick = {
                 onRegister(vehicleId!!, operatorId, null, null, null, reading.replace(',', '.'), null, false, currentDateTime(), photo)
@@ -2012,7 +2222,7 @@ fun StartScreen(
             val found = filtered.firstOrNull { it.code.equals(code.trim(), true) }
             vehicleId = found?.id
             operatorId = null; reading = ""; photo = null
-            message = if (found == null) "No se encontro el tractor en la sede seleccionada." else null
+            message = if (found == null) "No se encontro el equipo en la sede seleccionada." else null
             showQr = false
         },
     )
@@ -2272,7 +2482,7 @@ fun QrScannerBottomSheet(
                 }
                 Column(Modifier.weight(1f)) {
                     Text("Escanear QR", color = Color.White, fontWeight = FontWeight.Black, style = MaterialTheme.typography.titleMedium)
-                    Text("El QR debe contener solo el codigo del tractor.", color = Color(0xFFB7C6BE), fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall)
+                    Text("El QR debe contener solo el codigo del equipo.", color = Color(0xFFB7C6BE), fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall)
                 }
             }
 
@@ -2392,7 +2602,7 @@ fun CloseCaptureReviewCard(
             }
             AppTextField("Valor confirmado", confirmed, {
                 confirmed = it
-            }, KeyboardType.Decimal)
+            }, KeyboardType.Decimal, suffixText = "h")
             if (validation != null) ErrorBox(validation)
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedButton(
@@ -2436,7 +2646,7 @@ fun CloseScreen(
     val localPendingClose = localRecords.filter { it.finalConfirmed.isNullOrBlank() }
     val localServerIds = localRecords.mapNotNull { it.serverId }.toSet()
     val remotePending = pending.filterNot { it.id in localServerIds }
-    val photoRequired = registrationType == RegistrationType.TRACTORS
+    val photoRequired = registrationType.config.requirePhoto && registrationType.config.requiredPhotoEvidence
 
     Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -2562,7 +2772,7 @@ fun LocalPendingCard(
             if (canClose) {
                 if (draft == null) {
                     val validation = readingError(reading, minimum, false)
-                    AppTextField("Horometro de cierre", reading, { reading = it }, KeyboardType.Decimal)
+                    AppTextField("Horometro de cierre", reading, { reading = it }, KeyboardType.Decimal, suffixText = "h")
                     if (reading.isNotBlank()) validation?.let { ErrorBox(it) }
                     if (!photoRequired) {
                         OutlinedButton(
@@ -2669,7 +2879,7 @@ fun PendingCard(
             }
             if (draft == null) {
                 val validation = readingError(reading, minimum, false)
-                AppTextField("Horometro de cierre", reading, { reading = it }, KeyboardType.Decimal)
+                AppTextField("Horometro de cierre", reading, { reading = it }, KeyboardType.Decimal, suffixText = "h")
                 if (reading.isNotBlank()) validation?.let { ErrorBox(it) }
                 if (!photoRequired) {
                     OutlinedButton(
@@ -2793,34 +3003,34 @@ fun VehicleOptionCard(
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .height(112.dp)
-            .border(1.5.dp, borderColor, RoundedCornerShape(22.dp))
+            .height(116.dp)
+            .border(1.dp, borderColor, RoundedCornerShape(20.dp))
             .clickable(onClick = onClick),
-        shape = RoundedCornerShape(22.dp),
+        shape = RoundedCornerShape(20.dp),
         colors = CardDefaults.cardColors(containerColor = if (selected) Color(0xFFF0FDF4) else Color.White),
-        elevation = CardDefaults.cardElevation(defaultElevation = if (selected) 4.dp else 1.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = if (selected) 4.dp else 2.dp),
     ) {
         Row(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 18.dp),
+                .padding(horizontal = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(
                 modifier = Modifier
-                    .size(64.dp)
+                    .size(68.dp)
                     .clip(CircleShape)
-                    .background(if (selected) AppGreen else AppGreenSoft),
+                    .background(if (selected) AppGreen else Color(0xFFEAF7ED)),
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(icon, contentDescription = null, tint = if (selected) Color.White else AppGreen, modifier = Modifier.size(30.dp))
+                Icon(icon, contentDescription = null, tint = if (selected) Color.White else AppGreen, modifier = Modifier.size(34.dp))
             }
             Spacer(Modifier.width(16.dp))
             Column(Modifier.weight(1f), horizontalAlignment = Alignment.Start) {
-                Text(title, color = AppGreenDark, fontWeight = FontWeight.Black, style = MaterialTheme.typography.titleLarge)
-                Text(subtitle, color = AppMuted, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyMedium)
+                Text(title, color = AppGreenDark, fontWeight = FontWeight.Black, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(subtitle, color = AppMuted, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
-            Icon(Icons.Filled.ChevronRight, contentDescription = null, tint = AppGreenDark)
+            Icon(Icons.Filled.ChevronRight, contentDescription = null, tint = AppGreenDark, modifier = Modifier.size(30.dp))
         }
     }
 }
@@ -2923,7 +3133,7 @@ fun InfoLine(text: String, compact: Boolean = false) {
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(if (compact) 16.dp else 18.dp))
-            .background(AppGreenSoft)
+            .background(Color(0xFFEAF7ED))
             .padding(horizontal = 12.dp, vertical = if (compact) 10.dp else 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -2992,10 +3202,10 @@ fun CaptureCard(registrationType: RegistrationType) {
                 Column {
                     Text("Captura de horometro", color = Color(0xFF064E3B), fontWeight = FontWeight.Black, style = MaterialTheme.typography.titleLarge)
                     Text(
-                        if (registrationType == RegistrationType.TRACTORS) {
-                            "Toma una foto del horometro"
+                        if (registrationType.config.requiredPhotoEvidence) {
+                            "Toma una foto de evidencia"
                         } else {
-                            "Toma una foto clara del horometro"
+                            "La foto es opcional para este flujo"
                         },
                         color = Color(0xFF475569),
                     )
@@ -3056,11 +3266,7 @@ fun CapturedPhotoPreviewCard(photoPath: String) {
 @Composable
 fun ScheduleCaptureCard(registrationType: RegistrationType) {
     InfoLine(
-        if (registrationType == RegistrationType.TRACTORS) {
-            "El horometro inicial debe coincidir con el cierre del dia anterior."
-        } else {
-            "Solo disponible en horario permitido: 7:00 a 8:00 a. m."
-        },
+        "Inicio ${registrationType.config.startFrom.take(5)} a ${registrationType.config.startTo.take(5)}. Cierre maximo ${registrationType.config.closeUntil.take(5)}.",
     )
 }
 
@@ -3288,6 +3494,7 @@ fun AppTextField(
     onChange: (String) -> Unit,
     keyboardType: KeyboardType = KeyboardType.Text,
     password: Boolean = false,
+    suffixText: String? = null,
 ) {
     OutlinedTextField(
         modifier = Modifier.fillMaxWidth(),
@@ -3302,6 +3509,11 @@ fun AppTextField(
         label = { Text(label, style = MaterialTheme.typography.bodySmall) },
         keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
         visualTransformation = if (password) PasswordVisualTransformation() else VisualTransformation.None,
+        suffix = suffixText?.let {
+            {
+                Text(it, color = AppText, fontWeight = FontWeight.Black)
+            }
+        },
         singleLine = true,
         shape = RoundedCornerShape(16.dp),
         colors = OutlinedTextFieldDefaults.colors(
@@ -3339,7 +3551,7 @@ private fun LocationOption.label(): String {
 @Composable
 fun TabButton(label: String, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
     Button(
-        modifier = modifier.height(42.dp),
+        modifier = modifier.height(46.dp),
         shape = RoundedCornerShape(12.dp),
         colors = ButtonDefaults.buttonColors(
             containerColor = if (selected) Color.White else Color.Transparent,
@@ -3348,7 +3560,15 @@ fun TabButton(label: String, selected: Boolean, modifier: Modifier = Modifier, o
         elevation = ButtonDefaults.buttonElevation(defaultElevation = if (selected) 2.dp else 0.dp),
         onClick = onClick,
     ) {
-        Icon(if (label == "Inicio") Icons.Filled.Speed else Icons.Filled.AccessTime, contentDescription = null, modifier = Modifier.size(18.dp))
+        Icon(
+            when (label) {
+                "Inicio" -> Icons.Filled.Edit
+                "Historial" -> Icons.Filled.AccessTime
+                else -> Icons.Filled.Speed
+            },
+            contentDescription = null,
+            modifier = Modifier.size(18.dp),
+        )
         Spacer(Modifier.width(6.dp))
         Text(label, fontWeight = FontWeight.Black, style = MaterialTheme.typography.bodyMedium)
     }
@@ -3449,6 +3669,39 @@ private fun displayDate(value: String?): String {
 
 private fun displayTime(value: String?): String {
     return displayDateTime(value).substringAfter(" ", "-")
+}
+
+private fun historyDateKey(value: String?): String {
+    if (value.isNullOrBlank()) {
+        return "0000-00-00"
+    }
+
+    val raw = value.trim()
+    val isoDate = Regex("""^\d{4}-\d{2}-\d{2}""").find(raw)?.value
+    if (isoDate != null) {
+        return isoDate
+    }
+
+    return runCatching {
+        LocalDateTime.parse(normalizeDateTimeForParsing(raw)).toLocalDate().toString()
+    }.getOrElse {
+        runCatching {
+            LocalDate.parse(raw.substringBefore(" "), DateTimeFormatter.ofPattern("dd/MM/yyyy")).toString()
+        }.getOrDefault("0000-00-00")
+    }
+}
+
+private fun historyDateTitle(dateKey: String): String {
+    val date = runCatching { LocalDate.parse(dateKey) }.getOrNull()
+        ?: return "Sin fecha"
+    val formatted = date.format(DateTimeFormatter.ofPattern("dd/MM/yyyy"))
+    val today = LocalDate.now()
+
+    return when (date) {
+        today -> "Hoy · $formatted"
+        today.minusDays(1) -> "Ayer · $formatted"
+        else -> formatted
+    }
 }
 
 private fun normalizeDateTimeForParsing(value: String): String {

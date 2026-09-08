@@ -27,6 +27,36 @@ export type UserFilters = {
   per_page?: number
 }
 
+export type UsuarioAplicativo = {
+  id: number
+  personal_id: number | null
+  nombre: string
+  usuario: string
+  estado: 'ACTIVO' | 'INACTIVO'
+  ultimo_login_at: string | null
+  personal?: {
+    id: number
+    dni: string
+    nombres: string
+    apellidos: string
+    tipo: string
+  } | null
+  tipos_vehiculo?: Array<{
+    id: number
+    nombre: string
+    estado: 'ACTIVO' | 'INACTIVO'
+  }>
+}
+
+export type UsuarioAplicativoPayload = {
+  personal_id: number | null
+  nombre: string
+  usuario: string
+  password?: string | null
+  estado: 'ACTIVO' | 'INACTIVO'
+  tipo_vehiculo_ids: number[]
+}
+
 export type RoleFilters = {
   q?: string
   page?: number

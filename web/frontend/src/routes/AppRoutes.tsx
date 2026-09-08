@@ -20,6 +20,7 @@ import { TallerPreventivoPage } from '../pages/TallerPreventivoPage'
 import { TallerReportesPage } from '../pages/TallerReportesPage'
 import { TallerRepuestosPage } from '../pages/TallerRepuestosPage'
 import { UsuariosPage } from '../pages/UsuariosPage'
+import { UsuariosAplicativoPage } from '../pages/UsuariosAplicativoPage'
 import { Vehiculo360Page } from '../pages/Vehiculo360Page'
 
 export function AppRoutes() {
@@ -47,6 +48,7 @@ export function AppRoutes() {
         <Route path="/maestros" element={<MaestrosPage />} />
         <Route path="/vehiculos/:id" element={<Vehiculo360Page />} />
         <Route path="/usuarios" element={<UsuariosPage />} />
+        <Route path="/usuarios/aplicativo" element={<UsuariosAplicativoPage />} />
         <Route path="/usuarios/roles" element={<RolesPage />} />
         <Route
           path="/configuracion"

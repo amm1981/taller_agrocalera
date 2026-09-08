@@ -9,10 +9,13 @@ use App\Models\Lote;
 use App\Models\Personal;
 use App\Models\Sector;
 use App\Models\Sede;
+use App\Models\TipoVehiculo;
 use App\Models\User;
+use App\Models\UsuarioAplicativo;
 use App\Models\Vehiculo;
 use Database\Seeders\DatabaseSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
 use ZipArchive;
@@ -657,6 +660,61 @@ class HorometrosApiTest extends TestCase
             ->withToken($user->createToken('feature-test')->plainTextToken)
             ->postJson('/api/horometros/inicio', [])
             ->assertForbidden();
+    }
+
+    public function test_app_user_login_and_sync_only_return_allowed_type_data(): void
+    {
+        $this->seed(DatabaseSeeder::class);
+
+        $tractorType = TipoVehiculo::where('nombre', 'Tractor')->firstOrFail();
+        $machineryType = TipoVehiculo::where('nombre', 'Maquinaria Pesada')->firstOrFail();
+        $personal = Personal::query()->create([
+            'dni' => '76543210',
+            'nombres' => 'Jose',
+            'apellidos' => 'Tractorista',
+            'tipo' => 'TRACTORISTA',
+            'estado' => 'ACTIVO',
+        ]);
+        $appUser = UsuarioAplicativo::query()->create([
+            'personal_id' => $personal->id,
+            'nombre' => 'Jose Tractorista',
+            'usuario' => '76543210',
+            'password' => Hash::make('76543210'),
+            'estado' => 'ACTIVO',
+        ]);
+        $appUser->tiposVehiculo()->sync([$tractorType->id]);
+
+        HorometroRegistro::query()->create([
+            'vehiculo_id' => Vehiculo::where('tipo_vehiculo_id', $tractorType->id)->value('id'),
+            'operario_id' => $personal->id,
+            'usuario_aplicativo_id' => $appUser->id,
+            'fecha' => '2026-09-08',
+            'horometro_inicial_confirmado' => 100,
+            'fecha_hora_inicio' => '2026-09-08 07:20:00',
+            'estado' => 'EN_JORNADA',
+        ]);
+        HorometroRegistro::query()->create([
+            'vehiculo_id' => Vehiculo::where('tipo_vehiculo_id', $machineryType->id)->value('id'),
+            'fecha' => '2026-09-08',
+            'horometro_inicial_confirmado' => 200,
+            'fecha_hora_inicio' => '2026-09-08 07:25:00',
+            'estado' => 'EN_JORNADA',
+        ]);
+
+        $login = $this->postJson('/api/app/horometros/login', [
+            'usuario' => '76543210',
+            'password' => '76543210',
+        ])->assertOk()
+            ->assertJsonPath('user.usuario', '76543210')
+            ->assertJsonCount(1, 'tipos_registro');
+
+        $token = $login->json('token');
+        $sync = $this->withToken($token)->getJson('/api/app/horometros/sync')->assertOk();
+
+        $this->assertContains($tractorType->id, collect($sync->json('data.tipos_registro'))->pluck('id')->all());
+        $this->assertNotContains($machineryType->id, collect($sync->json('data.tipos_registro'))->pluck('id')->all());
+        $this->assertTrue(collect($sync->json('data.vehiculos'))->every(fn (array $item) => $item['tipo_vehiculo_id'] === $tractorType->id));
+        $this->assertTrue(collect($sync->json('data.pendientes'))->every(fn (array $item) => $item['usuario_aplicativo_id'] === $appUser->id));
     }
 
     private function adminToken(): string

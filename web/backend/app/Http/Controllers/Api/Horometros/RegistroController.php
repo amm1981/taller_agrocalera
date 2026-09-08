@@ -262,7 +262,7 @@ class RegistroController extends Controller
      */
     private function photoRules(string $base64Field, bool $requiredByVehicle): array
     {
-        $required = $this->configuracion()->foto_obligatoria && $requiredByVehicle ? "required_without:{$base64Field}" : 'nullable';
+        $required = $requiredByVehicle ? "required_without:{$base64Field}" : 'nullable';
 
         return [
             'path' => [$required, 'nullable', 'string', 'max:255'],
@@ -274,8 +274,12 @@ class RegistroController extends Controller
         $vehiculo = Vehiculo::query()
             ->with('tipoVehiculo')
             ->find($vehiculoId);
+        $configuracion = HorometroConfiguracion::query()
+            ->where('tipo_vehiculo_id', $vehiculo?->tipo_vehiculo_id)
+            ->first()
+            ?? $this->configuracion();
 
-        return ! str($vehiculo?->tipoVehiculo?->nombre ?? '')->lower()->contains('maquinaria pesada');
+        return $configuracion->foto_obligatoria && (bool) ($configuracion->campos_requeridos['foto'] ?? true);
     }
 
     private function configuracion(): HorometroConfiguracion

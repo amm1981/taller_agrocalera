@@ -12,6 +12,7 @@ use App\Models\Sede;
 use App\Models\TipoFalla;
 use App\Models\TipoPersonal;
 use App\Models\TipoVehiculo;
+use App\Models\HorometroConfiguracion;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\JsonResponse;
@@ -126,7 +127,10 @@ class CatalogController extends Controller
 
     public function storeTipoVehiculo(Request $request): JsonResponse
     {
-        return $this->storeSimple(TipoVehiculo::class, $request, $this->tipoVehiculoRules());
+        $tipoVehiculo = TipoVehiculo::query()->create($request->validate($this->tipoVehiculoRules()));
+        HorometroConfiguracion::query()->firstOrCreate(['tipo_vehiculo_id' => $tipoVehiculo->id]);
+
+        return response()->json(['data' => $tipoVehiculo], 201);
     }
 
     public function updateTipoVehiculo(Request $request, TipoVehiculo $tipoVehiculo): JsonResponse
@@ -252,7 +256,6 @@ class CatalogController extends Controller
                 'required',
                 'string',
                 'max:120',
-                Rule::in(['Tractor', 'Maquinaria Pesada']),
                 Rule::unique('tipos_vehiculo', 'nombre')->ignore($ignoreId),
             ],
             'requiere_horometro' => ['required', 'boolean'],

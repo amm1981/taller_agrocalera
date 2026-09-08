@@ -28,6 +28,7 @@ class HorometroRegistro extends Model
         'semana_anio',
         'operario_id',
         'usuario_responsable_id',
+        'usuario_aplicativo_id',
         'fundo_id',
         'sector_id',
         'lote_id',
@@ -101,6 +102,11 @@ class HorometroRegistro extends Model
     public function usuarioResponsable(): BelongsTo
     {
         return $this->belongsTo(User::class, 'usuario_responsable_id');
+    }
+
+    public function usuarioAplicativo(): BelongsTo
+    {
+        return $this->belongsTo(UsuarioAplicativo::class, 'usuario_aplicativo_id');
     }
 
     public function fundo(): BelongsTo

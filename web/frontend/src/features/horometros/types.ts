@@ -131,6 +131,7 @@ export type HorometrosReporte = {
 
 export type HorometroConfiguracion = {
   id: number
+  tipo_vehiculo_id?: number | null
   hora_inicio_desde: string
   hora_inicio_hasta: string
   hora_cierre_hasta: string
@@ -140,6 +141,24 @@ export type HorometroConfiguracion = {
   foto_obligatoria: boolean
   vigencia_reapertura_minutos: number
   ocr_activo: boolean
+  campos_requeridos?: {
+    sede?: boolean
+    operario?: boolean
+    foto?: boolean
+  } | null
+  parametros_adicionales?: {
+    personal_tipos?: string[]
+    [key: string]: unknown
+  } | null
+}
+
+export type HorometroConfiguracionPorTipo = {
+  tipo_vehiculo: {
+    id: number
+    nombre: string
+    estado: string
+  }
+  configuracion: HorometroConfiguracion
 }
 
 export type HorometroReapertura = {

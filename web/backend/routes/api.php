@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Api\Auth\AuthController;
+use App\Http\Controllers\Api\Horometros\AppHorometroController;
 use App\Http\Controllers\Api\Horometros\ConfiguracionController as HorometrosConfiguracionController;
 use App\Http\Controllers\Api\Horometros\DashboardController as HorometrosDashboardController;
 use App\Http\Controllers\Api\Horometros\ReaperturaController as HorometrosReaperturaController;
@@ -17,6 +18,7 @@ use App\Http\Controllers\Api\Taller\PreventivoController;
 use App\Http\Controllers\Api\Taller\ReporteController as TallerReporteController;
 use App\Http\Controllers\Api\Taller\RepuestoController;
 use App\Http\Controllers\Api\Usuarios\RolePermissionController;
+use App\Http\Controllers\Api\Usuarios\UsuarioAplicativoController;
 use App\Http\Controllers\Api\Usuarios\UserController;
 use Illuminate\Support\Facades\Route;
 
@@ -26,6 +28,17 @@ Route::get('/health', fn () => [
 ]);
 
 Route::get('/integraciones/horometros/exportable-sap', SapReportController::class);
+
+Route::prefix('app/horometros')->group(function () {
+    Route::post('/login', [AppHorometroController::class, 'login']);
+
+    Route::middleware('auth:sanctum')->group(function () {
+        Route::get('/sync', [AppHorometroController::class, 'sync']);
+        Route::get('/pendientes', [AppHorometroController::class, 'pendientes']);
+        Route::post('/inicio', [AppHorometroController::class, 'inicio']);
+        Route::post('/{registro}/cierre', [AppHorometroController::class, 'cierre']);
+    });
+});
 
 Route::prefix('auth')->group(function () {
     Route::post('/login', [AuthController::class, 'login']);
@@ -89,10 +102,14 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::middleware('permission:usuarios.ver')->group(function () {
         Route::get('/usuarios', [UserController::class, 'index']);
         Route::get('/usuarios/{usuario}', [UserController::class, 'show']);
+        Route::get('/usuarios-aplicativo', [UsuarioAplicativoController::class, 'index']);
+        Route::get('/usuarios-aplicativo/{usuarioAplicativo}', [UsuarioAplicativoController::class, 'show']);
     });
 
     Route::middleware('permission:usuarios.crear')->post('/usuarios', [UserController::class, 'store']);
+    Route::middleware('permission:usuarios.crear')->post('/usuarios-aplicativo', [UsuarioAplicativoController::class, 'store']);
     Route::middleware('permission:usuarios.editar')->put('/usuarios/{usuario}', [UserController::class, 'update']);
+    Route::middleware('permission:usuarios.editar')->put('/usuarios-aplicativo/{usuarioAplicativo}', [UsuarioAplicativoController::class, 'update']);
 
     Route::middleware('permission:usuarios.permisos')->group(function () {
         Route::get('/roles', [RolePermissionController::class, 'roles']);
@@ -149,6 +166,7 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/pendientes', [HorometrosRegistroController::class, 'pendientes']);
             Route::get('/validaciones', [HorometrosRegistroController::class, 'validaciones']);
             Route::get('/reaperturas', [HorometrosReaperturaController::class, 'index']);
+            Route::get('/configuraciones', [HorometrosConfiguracionController::class, 'index']);
             Route::get('/configuracion', [HorometrosConfiguracionController::class, 'show']);
         });
 
@@ -162,6 +180,7 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::post('/{registro}/reabrir', [HorometrosRegistroController::class, 'reabrir']);
         });
         Route::middleware('permission:horometros.validar')->post('/{registro}/anular', [HorometrosRegistroController::class, 'anular']);
+        Route::middleware('permission:horometros.validar')->put('/configuraciones/{tipoVehiculo}', [HorometrosConfiguracionController::class, 'updateByTipo']);
         Route::middleware('permission:horometros.validar')->put('/configuracion', [HorometrosConfiguracionController::class, 'update']);
         Route::middleware('permission:horometros.reportes.ver')->get('/reportes', HorometrosReporteController::class);
     });

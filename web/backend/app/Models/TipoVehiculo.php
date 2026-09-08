@@ -4,6 +4,8 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class TipoVehiculo extends Model
 {
@@ -17,6 +19,16 @@ class TipoVehiculo extends Model
         'requiere_login_horometro',
         'estado',
     ];
+
+    public function configuracionesHorometro(): HasMany
+    {
+        return $this->hasMany(HorometroConfiguracion::class);
+    }
+
+    public function configuracionHorometro(): HasOne
+    {
+        return $this->hasOne(HorometroConfiguracion::class);
+    }
 
     protected function casts(): array
     {

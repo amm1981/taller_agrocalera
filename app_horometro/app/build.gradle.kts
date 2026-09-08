@@ -20,6 +20,7 @@ fun quotedBuildConfig(name: String, fallback: String): String {
 
 android {
     namespace = "com.amm1981.horometro"
+
     compileSdk {
         version = release(37)
     }
@@ -32,21 +33,33 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        buildConfigField("String", "HOROMETRO_SYNC_USER", quotedBuildConfig("HOROMETRO_SYNC_USER", ""))
-        buildConfigField("String", "HOROMETRO_SYNC_PASSWORD", quotedBuildConfig("HOROMETRO_SYNC_PASSWORD", ""))
+
+        buildConfigField(
+            "String",
+            "HOROMETRO_SYNC_USER",
+            quotedBuildConfig("HOROMETRO_SYNC_USER", "")
+        )
+
+        buildConfigField(
+            "String",
+            "HOROMETRO_SYNC_PASSWORD",
+            quotedBuildConfig("HOROMETRO_SYNC_PASSWORD", "")
+        )
     }
 
     buildTypes {
         release {
             optimization {
-                enable = false
+                enable = true
             }
         }
     }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
     }
+
     buildFeatures {
         compose = true
         buildConfig = true

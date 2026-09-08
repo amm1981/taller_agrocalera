@@ -47,10 +47,6 @@ class InitialCatalogSeeder extends Seeder
             );
         }
 
-        TipoVehiculo::query()
-            ->whereNotIn('nombre', collect($tiposVehiculo)->pluck('nombre')->all())
-            ->update(['estado' => 'INACTIVO']);
-
         foreach (['Motor', 'Transmisión', 'Eléctrico', 'Hidráulico', 'Neumático', 'Otro'] as $tipoFalla) {
             TipoFalla::updateOrCreate(
                 ['nombre' => $tipoFalla],

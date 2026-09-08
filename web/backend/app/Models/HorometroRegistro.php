@@ -27,6 +27,7 @@ class HorometroRegistro extends Model
         'fundo_id',
         'sector_id',
         'lote_id',
+        'punto_medida',
         'horometro_inicial_ocr',
         'horometro_inicial_confirmado',
         'foto_inicial',

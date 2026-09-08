@@ -17,6 +17,8 @@ import type {
   TipoVehiculo,
   VehicleImportRow,
   VehicleImportSummary,
+  VehicleBulkDeleteSummary,
+  VehicleMeasurementPointHistory,
   VehiculoMaster,
 } from './types'
 
@@ -52,6 +54,20 @@ export async function updateMasterRecord(tab: MasterTabKey, id: number, payload:
 
 export async function deleteMasterRecord(tab: MasterTabKey, id: number) {
   await api.delete(`/${tab}/${id}`)
+}
+
+export async function deleteVehicleMasters(ids: number[]) {
+  const { data } = await api.delete<DataResponse<VehicleBulkDeleteSummary>>('/vehiculos', {
+    data: { ids },
+  })
+
+  return data.data
+}
+
+export async function getVehicleMeasurementPointHistory(id: number) {
+  const { data } = await api.get<DataResponse<VehicleMeasurementPointHistory>>(`/vehiculos/${id}/puntos-medida`)
+
+  return data.data
 }
 
 export async function importVehicleMasters(rows: VehicleImportRow[]) {

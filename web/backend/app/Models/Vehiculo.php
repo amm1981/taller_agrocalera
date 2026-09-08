@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Vehiculo extends Model
 {
@@ -66,5 +67,10 @@ class Vehiculo extends Model
     public function lote(): BelongsTo
     {
         return $this->belongsTo(Lote::class);
+    }
+
+    public function puntosMedida(): HasMany
+    {
+        return $this->hasMany(VehiculoPuntoMedida::class);
     }
 }

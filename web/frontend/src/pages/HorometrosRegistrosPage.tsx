@@ -165,6 +165,7 @@ export function HorometrosRegistrosPage() {
                 <th className="border-b border-slate-200 px-4 py-3">Fecha</th>
                 <th className="border-b border-slate-200 px-4 py-3">Vehículo</th>
                 <th className="border-b border-slate-200 px-4 py-3">Ubicación</th>
+                <th className="border-b border-slate-200 px-4 py-3">Punto medida</th>
                 <th className="border-b border-slate-200 px-4 py-3">Personal</th>
                 <th className="border-b border-slate-200 px-4 py-3">Lecturas</th>
                 <th className="border-b border-slate-200 px-4 py-3">Estado</th>
@@ -184,6 +185,7 @@ export function HorometrosRegistrosPage() {
                     <div>{registro.fundo?.nombre ?? '-'}</div>
                     <div className="text-xs text-slate-500">{registro.lote?.nombre ?? 'Sin lote'}</div>
                   </td>
+                  <td className="px-4 py-3 align-top font-semibold text-slate-700">{registro.punto_medida ?? '-'}</td>
                   <td className="px-4 py-3 align-top text-slate-700">
                     <div>{personName(registro.operario)}</div>
                     <div className="text-xs text-slate-500">{registro.usuario_responsable?.name ?? 'Sin responsable'}</div>
@@ -228,7 +230,7 @@ export function HorometrosRegistrosPage() {
               ))}
               {!registros.isLoading && !registros.data?.data.length ? (
                 <tr>
-                  <td colSpan={8} className="px-4 py-10 text-center text-sm text-slate-500">No hay registros para los filtros seleccionados.</td>
+                  <td colSpan={9} className="px-4 py-10 text-center text-sm text-slate-500">No hay registros para los filtros seleccionados.</td>
                 </tr>
               ) : null}
             </tbody>
@@ -332,6 +334,7 @@ function RegistroDetailModal({ registro, onClose }: { registro: HorometroRegistr
           <Detail label="Estado" value={registro.estado.replaceAll('_', ' ')} />
           <Detail label="Fundo" value={registro.fundo?.nombre ?? '-'} />
           <Detail label="Lote" value={registro.lote?.nombre ?? '-'} />
+          <Detail label="Punto de medida" value={registro.punto_medida ?? '-'} />
           <Detail label="Responsable" value={registro.usuario_responsable?.name ?? '-'} />
         </div>
       </section>

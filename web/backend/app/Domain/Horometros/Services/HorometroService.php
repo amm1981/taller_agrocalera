@@ -7,6 +7,7 @@ use App\Models\HorometroReapertura;
 use App\Models\HorometroRegistro;
 use App\Models\User;
 use App\Models\Vehiculo;
+use App\Models\VehiculoPuntoMedida;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
@@ -69,6 +70,7 @@ class HorometroService
                 'fundo_id' => $data['fundo_id'] ?? $registro->fundo_id,
                 'sector_id' => $data['sector_id'] ?? $registro->sector_id,
                 'lote_id' => $data['lote_id'] ?? $registro->lote_id,
+                'punto_medida' => $this->puntoMedidaVigente($vehiculo, $fecha),
                 'horometro_inicial_ocr' => $data['horometro_inicial_ocr'] ?? null,
                 'horometro_inicial_confirmado' => $data['horometro_inicial_confirmado'],
                 'foto_inicial' => $data['foto_inicial'] ?? $registro->foto_inicial,
@@ -147,6 +149,7 @@ class HorometroService
 
             $registro->update([
                 'usuario_responsable_id' => $user->id,
+                'punto_medida' => $registro->punto_medida ?? $this->puntoMedidaVigente($vehiculo, $registro->fecha->toDateString()),
                 'horometro_final_ocr' => $data['horometro_final_ocr'] ?? null,
                 'horometro_final_confirmado' => $data['horometro_final_confirmado'],
                 'foto_final' => $data['foto_final'] ?? $registro->foto_final,
@@ -389,6 +392,18 @@ class HorometroService
             ->map(fn (HorometroRegistro $registro) => $this->referenciaValida($registro->horometro_final_confirmado)
                 ?? $this->referenciaValida($registro->horometro_inicial_confirmado))
             ->first();
+    }
+
+    private function puntoMedidaVigente(Vehiculo $vehiculo, string $fecha): ?string
+    {
+        $punto = VehiculoPuntoMedida::query()
+            ->where('vehiculo_id', $vehiculo->id)
+            ->whereDate('vigente_desde', '<=', $fecha)
+            ->orderByDesc('vigente_desde')
+            ->orderByDesc('id')
+            ->value('punto_medida');
+
+        return $punto ?: $vehiculo->punto_medida;
     }
 
     private function loadRegistro(HorometroRegistro $registro): HorometroRegistro

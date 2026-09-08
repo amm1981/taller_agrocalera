@@ -21,9 +21,11 @@ export function formatDate(value?: string | null) {
     return '-'
   }
 
+  const normalized = /^\d{4}-\d{2}-\d{2}$/.test(value) ? `${value}T00:00:00` : value
+
   return new Intl.DateTimeFormat('es-PE', {
     dateStyle: 'short',
-  }).format(new Date(value))
+  }).format(new Date(normalized))
 }
 
 export function formatMinutes(value: number | null | undefined) {

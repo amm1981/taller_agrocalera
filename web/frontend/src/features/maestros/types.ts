@@ -138,6 +138,31 @@ export type VehicleImportSummary = {
   vehiculos_actualizados: number
 }
 
+export type VehicleBulkDeleteSummary = {
+  eliminados: number
+  bloqueados: Array<Pick<VehiculoMaster, 'id' | 'codigo' | 'nombre'>>
+}
+
+export type VehicleMeasurementPointHistoryItem = {
+  id: number
+  punto_medida: string
+  vigente_desde: string | null
+  registros_count: number
+  usuario?: {
+    id: number
+    name: string
+    last_name: string | null
+    username: string | null
+  } | null
+  created_at: string | null
+}
+
+export type VehicleMeasurementPointHistory = {
+  vehiculo: VehiculoMaster
+  total_cambios: number
+  historial: VehicleMeasurementPointHistoryItem[]
+}
+
 export type PersonalImportRow = {
   dni: string
   nombres: string

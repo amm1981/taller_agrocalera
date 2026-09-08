@@ -311,6 +311,43 @@ class MaestrosApiTest extends TestCase
         ]);
     }
 
+    public function test_admin_can_bulk_delete_selected_vehicles(): void
+    {
+        $this->seed(DatabaseSeeder::class);
+        $token = $this->adminToken();
+
+        $sedeId = Sede::where('codigo', 'LOCAL')->value('id');
+        $tipoId = TipoVehiculo::where('nombre', 'Tractor')->value('id');
+        $vehiculoA = Vehiculo::query()->create([
+            'codigo' => 'TR-801',
+            'nombre' => 'Tractor 801',
+            'tipo_vehiculo_id' => $tipoId,
+            'sede_id' => $sedeId,
+            'estado' => 'OPERATIVO',
+            'activo' => true,
+        ]);
+        $vehiculoB = Vehiculo::query()->create([
+            'codigo' => 'TR-802',
+            'nombre' => 'Tractor 802',
+            'tipo_vehiculo_id' => $tipoId,
+            'sede_id' => $sedeId,
+            'estado' => 'OPERATIVO',
+            'activo' => true,
+        ]);
+
+        $this
+            ->withToken($token)
+            ->deleteJson('/api/vehiculos', [
+                'ids' => [$vehiculoA->id, $vehiculoB->id],
+            ])
+            ->assertOk()
+            ->assertJsonPath('data.eliminados', 2)
+            ->assertJsonPath('data.bloqueados', []);
+
+        $this->assertDatabaseMissing(Vehiculo::class, ['codigo' => 'TR-801']);
+        $this->assertDatabaseMissing(Vehiculo::class, ['codigo' => 'TR-802']);
+    }
+
     public function test_non_admin_cannot_delete_vehicle(): void
     {
         $this->seed(DatabaseSeeder::class);
@@ -352,6 +389,89 @@ class MaestrosApiTest extends TestCase
             ->assertJsonPath('code', 'VEHICLE_HAS_DEPENDENCIES');
     }
 
+    public function test_hourmeter_records_use_measurement_point_by_effective_date(): void
+    {
+        $this->seed(DatabaseSeeder::class);
+        $token = $this->adminToken();
+
+        $vehiculo = Vehiculo::where('codigo', 'TR-015')->firstOrFail();
+
+        $this
+            ->withToken($token)
+            ->putJson("/api/vehiculos/{$vehiculo->id}", [
+                'codigo' => $vehiculo->codigo,
+                'nombre' => $vehiculo->nombre,
+                'tipo_vehiculo_id' => $vehiculo->tipo_vehiculo_id,
+                'sede_id' => $vehiculo->sede_id,
+                'punto_medida' => '1139',
+                'punto_medida_vigente_desde' => '2026-09-01',
+                'horometro_base' => null,
+                'estado' => 'OPERATIVO',
+                'activo' => true,
+            ])
+            ->assertOk();
+
+        $this
+            ->withToken($token)
+            ->putJson("/api/vehiculos/{$vehiculo->id}", [
+                'codigo' => $vehiculo->codigo,
+                'nombre' => $vehiculo->nombre,
+                'tipo_vehiculo_id' => $vehiculo->tipo_vehiculo_id,
+                'sede_id' => $vehiculo->sede_id,
+                'punto_medida' => '1140',
+                'punto_medida_vigente_desde' => '2026-09-15',
+                'horometro_base' => null,
+                'estado' => 'OPERATIVO',
+                'activo' => true,
+            ])
+            ->assertOk();
+
+        $this
+            ->withToken($token)
+            ->postJson('/api/horometros/inicio', [
+                'vehiculo_id' => $vehiculo->id,
+                'fecha' => '2026-09-14',
+                'fecha_hora_inicio' => '2026-09-14 07:30:00',
+                'horometro_inicial_confirmado' => 100,
+                'foto_inicial' => 'inicio-14.jpg',
+            ])
+            ->assertCreated()
+            ->assertJsonPath('data.punto_medida', '1139');
+
+        $registro = HorometroRegistro::where('vehiculo_id', $vehiculo->id)
+            ->whereDate('fecha', '2026-09-14')
+            ->firstOrFail();
+
+        $this
+            ->withToken($token)
+            ->postJson("/api/horometros/{$registro->id}/cierre", [
+                'fecha_hora_final' => '2026-09-14 18:00:00',
+                'horometro_final_confirmado' => 100,
+                'foto_final' => 'final-14.jpg',
+            ])
+            ->assertOk();
+
+        $this
+            ->withToken($token)
+            ->postJson('/api/horometros/inicio', [
+                'vehiculo_id' => $vehiculo->id,
+                'fecha' => '2026-09-15',
+                'fecha_hora_inicio' => '2026-09-15 07:30:00',
+                'horometro_inicial_confirmado' => 100,
+                'foto_inicial' => 'inicio-15.jpg',
+            ])
+            ->assertCreated()
+            ->assertJsonPath('data.punto_medida', '1140');
+
+        $this
+            ->withToken($token)
+            ->getJson("/api/vehiculos/{$vehiculo->id}/puntos-medida")
+            ->assertOk()
+            ->assertJsonPath('data.total_cambios', 1)
+            ->assertJsonPath('data.historial.0.punto_medida', '1140')
+            ->assertJsonPath('data.historial.1.punto_medida', '1139');
+    }
+
     public function test_admin_can_download_personal_import_template(): void
     {
         $this->seed(DatabaseSeeder::class);
@@ -373,6 +493,33 @@ class MaestrosApiTest extends TestCase
         $this->assertNotFalse($zip->locateName('xl/worksheets/sheet1.xml'));
         $this->assertNotFalse($zip->locateName('xl/worksheets/sheet2.xml'));
         $this->assertStringContainsString('dataValidation', $zip->getFromName('xl/worksheets/sheet1.xml'));
+        $this->assertStringContainsString('FF1D4ED8', $zip->getFromName('xl/styles.xml'));
+
+        $zip->close();
+        unlink($path);
+    }
+
+    public function test_vehicle_import_template_has_measurement_point_and_blue_header(): void
+    {
+        $this->seed(DatabaseSeeder::class);
+
+        $response = $this
+            ->withToken($this->adminToken())
+            ->get('/api/importaciones/vehiculos/plantilla');
+
+        $response->assertOk();
+
+        $path = tempnam(sys_get_temp_dir(), 'vehicle_template_');
+        file_put_contents($path, $response->streamedContent());
+
+        $zip = new ZipArchive;
+
+        $this->assertTrue($zip->open($path));
+        $sheet = $zip->getFromName('xl/worksheets/sheet1.xml');
+
+        $this->assertStringContainsString('punto_medida', $sheet);
+        $this->assertStringContainsString('punto_medida_vigente_desde', $sheet);
+        $this->assertStringContainsString('FF1D4ED8', $zip->getFromName('xl/styles.xml'));
 
         $zip->close();
         unlink($path);

@@ -45,6 +45,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/vehiculos', [VehiculoController::class, 'index']);
         Route::get('/importaciones/vehiculos/plantilla', [VehiculoController::class, 'importTemplate']);
         Route::get('/vehiculos/{vehiculo}/trazabilidad', [VehiculoController::class, 'trazabilidad']);
+        Route::get('/vehiculos/{vehiculo}/puntos-medida', [VehiculoController::class, 'measurementPointHistory']);
         Route::get('/vehiculos/{vehiculo}', [VehiculoController::class, 'show']);
         Route::get('/personal', [PersonalController::class, 'index']);
         Route::get('/importaciones/personal/plantilla', [PersonalController::class, 'importTemplate']);
@@ -76,6 +77,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::put('/personal/{personal}', [PersonalController::class, 'update']);
     });
 
+    Route::middleware('permission:maestros.editar')->delete('/vehiculos', [VehiculoController::class, 'destroyMany']);
     Route::middleware('permission:maestros.editar')->delete('/vehiculos/{vehiculo}', [VehiculoController::class, 'destroy']);
 
     Route::middleware('permission:usuarios.ver')->group(function () {

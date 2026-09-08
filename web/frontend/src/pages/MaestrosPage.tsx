@@ -5,6 +5,7 @@ import {
   Download,
   Factory,
   FileUp,
+  History,
   Layers3,
   MapPinned,
   Pencil,
@@ -29,6 +30,7 @@ import { formatDate } from '../features/taller/components/tallerFormatters'
 import { useAuth } from '../features/auth/AuthContext'
 import {
   createMasterRecord,
+  deleteVehicleMasters,
   deleteMasterRecord,
   downloadPersonalImportTemplate,
   downloadVehicleImportTemplate as downloadVehicleImportTemplateFile,
@@ -39,6 +41,7 @@ import {
   getSectoresMaster,
   getSedesMaster,
   getTiposVehiculoMaster,
+  getVehicleMeasurementPointHistory,
   importPersonalMasters,
   importVehicleMasters,
   updateMasterRecord,
@@ -55,6 +58,7 @@ import type {
   PersonalImportSummary,
   VehicleImportRow,
   VehicleImportSummary,
+  VehicleMeasurementPointHistory,
   VehiculoMaster,
 } from '../features/maestros/types'
 import { AppLayout } from '../layouts/AppLayout'
@@ -383,6 +387,10 @@ export function MaestrosPage() {
   const [filters, setFilters] = useState({ q: '', estado: '', per_page: 50 })
   const [editing, setEditing] = useState<MasterRecord | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<VehiculoMaster | null>(null)
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false)
+  const [bulkDeleteSummary, setBulkDeleteSummary] = useState<{ eliminados: number; bloqueados: number } | null>(null)
+  const [selectedVehicleIds, setSelectedVehicleIds] = useState<number[]>([])
+  const [historyVehicle, setHistoryVehicle] = useState<VehiculoMaster | null>(null)
   const [form, setForm] = useState<MasterPayload>(() => emptyPayloadFor('vehiculos'))
   const [isFormOpen, setIsFormOpen] = useState(false)
   const [vehicleImportRows, setVehicleImportRows] = useState<VehicleImportRow[]>([])
@@ -418,6 +426,12 @@ export function MaestrosPage() {
 
   const fields = useMemo(() => fieldsFor(activeTab, lookups), [activeTab, lookups])
   const active = tabs.find((tab) => tab.key === activeTab) ?? tabs[0]
+  const visibleVehicles = useMemo(
+    () => activeTab === 'vehiculos'
+      ? (records.data?.data ?? []).filter((record): record is VehiculoMaster => 'tipo_vehiculo' in record)
+      : [],
+    [activeTab, records.data?.data],
+  )
   const canDeleteVehicles = activeTab === 'vehiculos'
     && (session?.roles.includes('ADMINISTRADOR') || session?.user.username === 'administrador')
 
@@ -425,8 +439,14 @@ export function MaestrosPage() {
     setEditing(null)
     setForm(emptyPayloadFor(activeTab))
     setIsFormOpen(false)
+    setSelectedVehicleIds([])
+    setBulkDeleteSummary(null)
     setFilters({ q: '', estado: '', per_page: 50 })
   }, [activeTab])
+
+  useEffect(() => {
+    setSelectedVehicleIds((current) => current.filter((id) => visibleVehicles.some((vehicle) => vehicle.id === id)))
+  }, [visibleVehicles])
 
   const save = useMutation({
     mutationFn: () => {
@@ -484,11 +504,31 @@ export function MaestrosPage() {
     mutationFn: (id: number) => deleteMasterRecord('vehiculos', id),
     onSuccess: async () => {
       setDeleteTarget(null)
+      setSelectedVehicleIds((current) => current.filter((id) => id !== deleteTarget?.id))
       await queryClient.invalidateQueries({ queryKey: ['maestros'] })
       await queryClient.invalidateQueries({ queryKey: ['vehiculos'] })
       await queryClient.invalidateQueries({ queryKey: ['horometros-dashboard'] })
       await queryClient.invalidateQueries({ queryKey: ['horometros-validaciones'] })
     },
+  })
+
+  const bulkDeleteVehicles = useMutation({
+    mutationFn: () => deleteVehicleMasters(selectedVehicleIds),
+    onSuccess: async (summary) => {
+      setBulkDeleteSummary({ eliminados: summary.eliminados, bloqueados: summary.bloqueados.length })
+      setSelectedVehicleIds([])
+      setBulkDeleteOpen(false)
+      await queryClient.invalidateQueries({ queryKey: ['maestros'] })
+      await queryClient.invalidateQueries({ queryKey: ['vehiculos'] })
+      await queryClient.invalidateQueries({ queryKey: ['horometros-dashboard'] })
+      await queryClient.invalidateQueries({ queryKey: ['horometros-validaciones'] })
+    },
+  })
+
+  const measurementHistory = useQuery({
+    queryKey: ['vehiculo-puntos-medida', historyVehicle?.id],
+    queryFn: () => getVehicleMeasurementPointHistory(historyVehicle!.id),
+    enabled: Boolean(historyVehicle),
   })
 
   const importPersonal = useMutation({
@@ -647,6 +687,20 @@ export function MaestrosPage() {
                     Imprimir QRs masivo
                   </Button>
                 ) : null}
+                {canDeleteVehicles && selectedVehicleIds.length > 0 ? (
+                  <Button
+                    variant="secondary"
+                    className="border-red-200 text-red-700 hover:bg-red-50"
+                    onClick={() => {
+                      setBulkDeleteSummary(null)
+                      bulkDeleteVehicles.reset()
+                      setBulkDeleteOpen(true)
+                    }}
+                  >
+                    <Trash2 className="h-4 w-4" aria-hidden="true" />
+                    Eliminar seleccionados ({selectedVehicleIds.length})
+                  </Button>
+                ) : null}
                 <Button onClick={startCreate}>
                   <Plus className="h-4 w-4" aria-hidden="true" />
                   Nuevo registro
@@ -715,16 +769,32 @@ export function MaestrosPage() {
           />
         ) : null}
 
+        {bulkDeleteSummary ? (
+          <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-900">
+            Vehículos eliminados: {bulkDeleteSummary.eliminados}. Bloqueados por registros asociados: {bulkDeleteSummary.bloqueados}.
+          </div>
+        ) : null}
+
         <MasterTable
           tab={activeTab}
           records={records.data?.data ?? []}
           isLoading={records.isLoading}
           onEdit={startEdit}
           canDeleteVehicles={canDeleteVehicles}
+          selectedVehicleIds={selectedVehicleIds}
+          onToggleVehicle={(id) => {
+            setBulkDeleteSummary(null)
+            setSelectedVehicleIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id])
+          }}
+          onToggleAllVehicles={(checked) => {
+            setBulkDeleteSummary(null)
+            setSelectedVehicleIds(checked ? visibleVehicles.map((vehicle) => vehicle.id) : [])
+          }}
           onDeleteVehicle={(vehicle) => {
             deleteVehicle.reset()
             setDeleteTarget(vehicle)
           }}
+          onOpenHistory={(vehicle) => setHistoryVehicle(vehicle)}
           onOpenQr={(vehicle) => setSelectedQrVehicle(vehicle)}
         />
       </div>
@@ -762,6 +832,28 @@ export function MaestrosPage() {
             setDeleteTarget(null)
           }}
           onConfirm={() => deleteVehicle.mutate(deleteTarget.id)}
+        />
+      ) : null}
+
+      {bulkDeleteOpen ? (
+        <BulkDeleteVehiclesModal
+          count={selectedVehicleIds.length}
+          loading={bulkDeleteVehicles.isPending}
+          error={bulkDeleteVehicles.error instanceof Error ? bulkDeleteVehicles.error.message : null}
+          onCancel={() => {
+            bulkDeleteVehicles.reset()
+            setBulkDeleteOpen(false)
+          }}
+          onConfirm={() => bulkDeleteVehicles.mutate()}
+        />
+      ) : null}
+
+      {historyVehicle ? (
+        <MeasurementPointHistoryModal
+          vehicle={historyVehicle}
+          history={measurementHistory.data ?? null}
+          loading={measurementHistory.isLoading}
+          onClose={() => setHistoryVehicle(null)}
         />
       ) : null}
     </AppLayout>
@@ -1000,7 +1092,11 @@ function MasterTable({
   isLoading,
   onEdit,
   canDeleteVehicles,
+  selectedVehicleIds,
+  onToggleVehicle,
+  onToggleAllVehicles,
   onDeleteVehicle,
+  onOpenHistory,
   onOpenQr,
 }: {
   tab: MasterTabKey
@@ -1008,15 +1104,35 @@ function MasterTable({
   isLoading: boolean
   onEdit: (record: MasterRecord) => void
   canDeleteVehicles?: boolean
+  selectedVehicleIds?: number[]
+  onToggleVehicle?: (id: number) => void
+  onToggleAllVehicles?: (checked: boolean) => void
   onDeleteVehicle?: (vehicle: VehiculoMaster) => void
+  onOpenHistory?: (vehicle: VehiculoMaster) => void
   onOpenQr?: (vehicle: VehiculoMaster) => void
 }) {
+  const visibleVehicles = tab === 'vehiculos'
+    ? records.filter((record): record is VehiculoMaster => 'tipo_vehiculo' in record)
+    : []
+  const selectedCount = selectedVehicleIds?.length ?? 0
+  const allSelected = visibleVehicles.length > 0 && selectedCount === visibleVehicles.length
+
   return (
     <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_12px_30px_rgba(15,23,42,0.04)]">
       <div className="overflow-x-auto">
         <table className="min-w-[900px] w-full border-collapse text-left text-sm">
           <thead className="bg-slate-50 text-xs font-black uppercase text-slate-500">
             <tr>
+              {tab === 'vehiculos' && canDeleteVehicles ? (
+                <th className="w-12 border-b border-slate-200 px-4 py-3">
+                  <input
+                    type="checkbox"
+                    checked={allSelected}
+                    onChange={(event) => onToggleAllVehicles?.(event.target.checked)}
+                    aria-label="Seleccionar todos los vehículos visibles"
+                  />
+                </th>
+              ) : null}
               {headersFor(tab).map((header) => (
                 <th key={header} className="border-b border-slate-200 px-4 py-3">{header}</th>
               ))}
@@ -1026,6 +1142,16 @@ function MasterTable({
           <tbody className="divide-y divide-slate-100">
             {records.map((record) => (
               <tr key={record.id} className="hover:bg-slate-50">
+                {tab === 'vehiculos' && canDeleteVehicles && 'tipo_vehiculo' in record ? (
+                  <td className="px-4 py-3 align-top">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(selectedVehicleIds?.includes(record.id))}
+                      onChange={() => onToggleVehicle?.(record.id)}
+                      aria-label={`Seleccionar vehículo ${recordTitle(record)}`}
+                    />
+                  </td>
+                ) : null}
                 {cellsFor(tab, record, onOpenQr).map((cell, index) => (
                   <td key={`${record.id}-${index}`} className="px-4 py-3 align-top text-slate-700">{cell}</td>
                 ))}
@@ -1035,6 +1161,16 @@ function MasterTable({
                       <Pencil className="h-4 w-4" aria-hidden="true" />
                       Editar
                     </Button>
+                    {tab === 'vehiculos' && 'tipo_vehiculo' in record ? (
+                      <Button
+                        variant="secondary"
+                        onClick={() => onOpenHistory?.(record as VehiculoMaster)}
+                        title="Historial de punto de medida"
+                        aria-label={`Ver historial de punto de medida de ${recordTitle(record)}`}
+                      >
+                        <History className="h-4 w-4 text-blue-700" aria-hidden="true" />
+                      </Button>
+                    ) : null}
                     {tab === 'vehiculos' && canDeleteVehicles && 'tipo_vehiculo' in record ? (
                       <Button
                         variant="secondary"
@@ -1052,7 +1188,7 @@ function MasterTable({
             ))}
             {!isLoading && !records.length ? (
               <tr>
-                <td colSpan={headersFor(tab).length + 1} className="px-4 py-10 text-center text-sm text-slate-500">
+                <td colSpan={headersFor(tab).length + 1 + (tab === 'vehiculos' && canDeleteVehicles ? 1 : 0)} className="px-4 py-10 text-center text-sm text-slate-500">
                   No hay registros para este maestro.
                 </td>
               </tr>
@@ -1199,6 +1335,134 @@ function DeleteVehicleModal({
             <Trash2 className="h-4 w-4" aria-hidden="true" />
             Eliminar
           </Button>
+        </div>
+      </section>
+    </div>
+  )
+}
+
+function BulkDeleteVehiclesModal({
+  count,
+  loading,
+  error,
+  onCancel,
+  onConfirm,
+}: {
+  count: number
+  loading: boolean
+  error: string | null
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm">
+      <section className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl">
+        <div className="flex items-start gap-3">
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-red-50 text-red-700">
+            <Trash2 className="h-5 w-5" aria-hidden="true" />
+          </span>
+          <div>
+            <h3 className="text-base font-black text-slate-950">Eliminar vehículos seleccionados</h3>
+            <p className="mt-1 text-sm font-medium text-slate-600">
+              Se intentarán eliminar {count} vehículo(s). Los que tengan registros asociados quedarán bloqueados.
+            </p>
+          </div>
+        </div>
+
+        {error ? (
+          <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700">
+            {error}
+          </div>
+        ) : null}
+
+        <div className="mt-5 flex justify-end gap-2">
+          <Button variant="secondary" onClick={onCancel} disabled={loading}>
+            Cancelar
+          </Button>
+          <Button className="bg-red-700 hover:bg-red-800" onClick={onConfirm} disabled={loading || count === 0}>
+            <Trash2 className="h-4 w-4" aria-hidden="true" />
+            Eliminar
+          </Button>
+        </div>
+      </section>
+    </div>
+  )
+}
+
+function MeasurementPointHistoryModal({
+  vehicle,
+  history,
+  loading,
+  onClose,
+}: {
+  vehicle: VehiculoMaster
+  history: VehicleMeasurementPointHistory | null
+  loading: boolean
+  onClose: () => void
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm">
+      <section className="max-h-[88vh] w-full max-w-2xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
+        <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-5 py-4">
+          <div className="flex items-center gap-3">
+            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50 text-blue-700">
+              <History className="h-5 w-5" aria-hidden="true" />
+            </span>
+            <div>
+              <h3 className="text-base font-black text-slate-950">Historial de punto de medida</h3>
+              <p className="text-xs font-semibold text-slate-500">{recordTitle(vehicle)}</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex h-9 w-9 items-center justify-center rounded-xl text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-950"
+            aria-label="Cerrar historial"
+          >
+            <X className="h-4 w-4" aria-hidden="true" />
+          </button>
+        </div>
+
+        <div className="max-h-[calc(88vh-74px)] overflow-y-auto p-5">
+          <div className="mb-4 rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-900">
+            Cambios registrados: {history?.total_cambios ?? 0}
+          </div>
+
+          {loading ? (
+            <div className="py-8 text-center text-sm font-medium text-slate-500">Cargando historial...</div>
+          ) : (
+            <div className="overflow-hidden rounded-xl border border-slate-200">
+              <table className="w-full border-collapse text-left text-sm">
+                <thead className="bg-slate-50 text-xs font-black uppercase text-slate-500">
+                  <tr>
+                    <th className="px-4 py-3">Punto de medida</th>
+                    <th className="px-4 py-3">Vigente desde</th>
+                    <th className="px-4 py-3">Registros</th>
+                    <th className="px-4 py-3">Usuario</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {(history?.historial ?? []).map((item) => (
+                    <tr key={item.id}>
+                      <td className="px-4 py-3 font-bold text-slate-950">{item.punto_medida}</td>
+                      <td className="px-4 py-3 text-slate-700">{formatDate(item.vigente_desde)}</td>
+                      <td className="px-4 py-3 text-slate-700">{item.registros_count}</td>
+                      <td className="px-4 py-3 text-slate-700">
+                        {[item.usuario?.name, item.usuario?.last_name].filter(Boolean).join(' ') || item.usuario?.username || 'Sistema'}
+                      </td>
+                    </tr>
+                  ))}
+                  {!history?.historial.length ? (
+                    <tr>
+                      <td colSpan={4} className="px-4 py-8 text-center text-sm text-slate-500">
+                        Este vehículo todavía no tiene historial de punto de medida.
+                      </td>
+                    </tr>
+                  ) : null}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       </section>
     </div>

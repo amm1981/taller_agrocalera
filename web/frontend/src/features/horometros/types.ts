@@ -21,6 +21,7 @@ export type HorometroRegistro = {
   fundo_id: number | null
   sector_id: number | null
   lote_id: number | null
+  punto_medida: string | null
   horometro_inicial_ocr: string | number | null
   horometro_inicial_confirmado: string | number | null
   foto_inicial: string | null

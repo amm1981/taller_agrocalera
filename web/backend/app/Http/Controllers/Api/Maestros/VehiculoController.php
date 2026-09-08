@@ -11,7 +11,9 @@ use App\Models\OrdenTrabajo;
 use App\Models\Sede;
 use App\Models\SolicitudRepuesto;
 use App\Models\TipoVehiculo;
+use App\Models\User;
 use App\Models\Vehiculo;
+use App\Models\VehiculoPuntoMedida;
 use App\Support\SimpleXlsx;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
@@ -185,6 +187,8 @@ class VehiculoController extends Controller
             $this->vehiclePayload($request->validate($this->rules()))
         );
 
+        $this->syncMeasurementPoint($vehiculo, $request->user());
+
         return response()->json([
             'data' => $vehiculo->load(['tipoVehiculo', 'gerencia', 'sede', 'fundo', 'sector', 'lote']),
         ], 201);
@@ -196,9 +200,42 @@ class VehiculoController extends Controller
             $this->vehiclePayload($request->validate($this->rules($vehiculo->id)))
         );
 
+        $this->syncMeasurementPoint($vehiculo->refresh(), $request->user());
+
         return response()->json([
             'data' => $vehiculo->refresh()->load(['tipoVehiculo', 'gerencia', 'sede', 'fundo', 'sector', 'lote']),
         ]);
+    }
+
+    public function measurementPointHistory(Vehiculo $vehiculo): array
+    {
+        $history = VehiculoPuntoMedida::query()
+            ->with('usuario:id,name,last_name,username')
+            ->where('vehiculo_id', $vehiculo->id)
+            ->orderByDesc('vigente_desde')
+            ->orderByDesc('id')
+            ->get()
+            ->map(function (VehiculoPuntoMedida $item) use ($vehiculo): array {
+                return [
+                    'id' => $item->id,
+                    'punto_medida' => $item->punto_medida,
+                    'vigente_desde' => $item->vigente_desde?->toDateString(),
+                    'registros_count' => HorometroRegistro::query()
+                        ->where('vehiculo_id', $vehiculo->id)
+                        ->where('punto_medida', $item->punto_medida)
+                        ->count(),
+                    'usuario' => $item->usuario,
+                    'created_at' => $item->created_at,
+                ];
+            });
+
+        return [
+            'data' => [
+                'vehiculo' => $vehiculo->load(['tipoVehiculo', 'sede']),
+                'total_cambios' => max($history->count() - 1, 0),
+                'historial' => $history,
+            ],
+        ];
     }
 
     public function destroy(Request $request, Vehiculo $vehiculo): JsonResponse
@@ -209,11 +246,7 @@ class VehiculoController extends Controller
             'Solo el usuario administrador puede eliminar vehículos.',
         );
 
-        $hasDependencies = HorometroRegistro::query()->where('vehiculo_id', $vehiculo->id)->exists()
-            || HorometroReapertura::query()->where('vehiculo_id', $vehiculo->id)->exists()
-            || OrdenTrabajo::query()->where('vehiculo_id', $vehiculo->id)->exists();
-
-        if ($hasDependencies) {
+        if ($this->hasDependencies($vehiculo->id)) {
             return response()->json([
                 'message' => 'No se puede eliminar el vehículo porque tiene registros asociados.',
                 'code' => 'VEHICLE_HAS_DEPENDENCIES',
@@ -223,6 +256,51 @@ class VehiculoController extends Controller
         $vehiculo->delete();
 
         return response()->json(null, 204);
+    }
+
+    public function destroyMany(Request $request): JsonResponse
+    {
+        abort_unless(
+            $request->user()?->hasRole('ADMINISTRADOR') || $request->user()?->username === 'administrador',
+            403,
+            'Solo el usuario administrador puede eliminar vehículos.',
+        );
+
+        $data = $request->validate([
+            'ids' => ['required', 'array', 'min:1', 'max:500'],
+            'ids.*' => ['integer', Rule::exists('vehiculos', 'id')],
+        ]);
+
+        $deleted = 0;
+        $blocked = [];
+
+        DB::transaction(function () use ($data, &$deleted, &$blocked): void {
+            Vehiculo::query()
+                ->whereIn('id', $data['ids'])
+                ->orderBy('id')
+                ->get()
+                ->each(function (Vehiculo $vehiculo) use (&$deleted, &$blocked): void {
+                    if ($this->hasDependencies($vehiculo->id)) {
+                        $blocked[] = [
+                            'id' => $vehiculo->id,
+                            'codigo' => $vehiculo->codigo,
+                            'nombre' => $vehiculo->nombre,
+                        ];
+
+                        return;
+                    }
+
+                    $vehiculo->delete();
+                    $deleted++;
+                });
+        });
+
+        return response()->json([
+            'data' => [
+                'eliminados' => $deleted,
+                'bloqueados' => $blocked,
+            ],
+        ]);
     }
 
     public function importTemplate(): BinaryFileResponse
@@ -238,8 +316,8 @@ class VehiculoController extends Controller
         $path = SimpleXlsx::createTemplate(
             ['codigo', 'tipo_vehiculo', 'placa', 'nombre', 'marca', 'modelo', 'punto_medida', 'punto_medida_vigente_desde', 'sede', 'horometro_base'],
             [
-                ['TR-100', 'Tractor', '', 'Tractor TR-100', 'John Deere', '5075E', 'PM-TR-100', now()->toDateString(), $sedes[0] ?? '', 0],
-                ['MP-001', 'Maquinaria Pesada', '', 'Excavadora MP-001', 'CAT', '320D', 'PM-MP-001', now()->toDateString(), $sedes[0] ?? '', 0],
+                ['TR-100', 'Tractor', '', 'Tractor TR-100', 'John Deere', '5075E', 'PM-TR-100', '', $sedes[0] ?? '', 0],
+                ['MP-001', 'Maquinaria Pesada', '', 'Excavadora MP-001', 'CAT', '320D', 'PM-MP-001', '', $sedes[0] ?? '', 0],
             ],
             [
                 'tipo_vehiculo' => ['Tractor', 'Maquinaria Pesada'],
@@ -298,6 +376,8 @@ class VehiculoController extends Controller
                 );
                 $summary[$tipo->wasRecentlyCreated ? 'tipos_creados' : 'tipos_actualizados']++;
 
+                $puntoMedida = $this->nullableText($row['punto_medida'] ?? null);
+                $vigenteDesde = $this->nullableText($row['punto_medida_vigente_desde'] ?? null);
                 $vehiculo = Vehiculo::query()->updateOrCreate(
                     ['codigo' => $this->cleanCode($row['codigo'])],
                     [
@@ -306,8 +386,8 @@ class VehiculoController extends Controller
                         'tipo_vehiculo_id' => $tipo->id,
                         'marca' => $this->nullableText($row['marca'] ?? null),
                         'modelo' => $this->nullableText($row['modelo'] ?? null),
-                        'punto_medida' => $this->nullableText($row['punto_medida'] ?? null),
-                        'punto_medida_vigente_desde' => $row['punto_medida_vigente_desde'] ?? null,
+                        'punto_medida' => $puntoMedida,
+                        'punto_medida_vigente_desde' => $puntoMedida ? ($vigenteDesde ?? now()->toDateString()) : null,
                         'gerencia_id' => null,
                         'sede_id' => $sede->id,
                         'fundo_id' => null,
@@ -318,6 +398,7 @@ class VehiculoController extends Controller
                         'activo' => true,
                     ],
                 );
+                $this->syncMeasurementPoint($vehiculo);
                 $summary[$vehiculo->wasRecentlyCreated ? 'vehiculos_creados' : 'vehiculos_actualizados']++;
             }
 
@@ -325,6 +406,13 @@ class VehiculoController extends Controller
         });
 
         return response()->json(['data' => $summary]);
+    }
+
+    private function hasDependencies(int $vehiculoId): bool
+    {
+        return HorometroRegistro::query()->where('vehiculo_id', $vehiculoId)->exists()
+            || HorometroReapertura::query()->where('vehiculo_id', $vehiculoId)->exists()
+            || OrdenTrabajo::query()->where('vehiculo_id', $vehiculoId)->exists();
     }
 
     /**
@@ -368,8 +456,13 @@ class VehiculoController extends Controller
      */
     private function vehiclePayload(array $data): array
     {
+        $puntoMedida = $this->nullableText($data['punto_medida'] ?? null);
+        $vigenteDesde = $this->nullableText($data['punto_medida_vigente_desde'] ?? null);
+
         return [
             ...$data,
+            'punto_medida' => $puntoMedida,
+            'punto_medida_vigente_desde' => $puntoMedida ? ($vigenteDesde ?? now()->toDateString()) : null,
             'gerencia_id' => null,
             'sede_id' => $data['sede_id'],
             'fundo_id' => null,
@@ -378,6 +471,28 @@ class VehiculoController extends Controller
             'estado' => $data['estado'] ?? 'OPERATIVO',
             'activo' => $data['activo'] ?? true,
         ];
+    }
+
+    private function syncMeasurementPoint(Vehiculo $vehiculo, ?User $user = null): void
+    {
+        $puntoMedida = $this->nullableText($vehiculo->punto_medida);
+
+        if ($puntoMedida === null) {
+            return;
+        }
+
+        $vigenteDesde = $vehiculo->punto_medida_vigente_desde?->toDateString() ?? now()->toDateString();
+
+        VehiculoPuntoMedida::query()->updateOrCreate(
+            [
+                'vehiculo_id' => $vehiculo->id,
+                'vigente_desde' => $vigenteDesde,
+            ],
+            [
+                'punto_medida' => $puntoMedida,
+                'usuario_id' => $user?->id,
+            ],
+        );
     }
 
     private function cleanCode(string $code): string

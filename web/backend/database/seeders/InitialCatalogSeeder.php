@@ -63,6 +63,7 @@ class InitialCatalogSeeder extends Seeder
             ['codigo' => 'RESPONSABLE', 'nombre' => 'Responsable'],
             ['codigo' => 'TECNICO', 'nombre' => 'Tecnico'],
             ['codigo' => 'CONDUCTOR', 'nombre' => 'Conductor'],
+            ['codigo' => 'MAQUINISTA', 'nombre' => 'Maquinista'],
             ['codigo' => 'OTRO', 'nombre' => 'Otro'],
         ] as $tipoPersonal) {
             TipoPersonal::updateOrCreate(

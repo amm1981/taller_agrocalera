@@ -10,6 +10,7 @@ use App\Models\HorometroConfiguracion;
 use App\Models\HorometroRegistro;
 use App\Models\Lote;
 use App\Models\Sector;
+use App\Models\Vehiculo;
 use App\Support\SimpleXlsx;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Builder;
@@ -155,7 +156,7 @@ class RegistroController extends Controller
 
     public function inicio(Request $request): JsonResponse
     {
-        $fotoRules = $this->photoRules('foto_inicial', 'foto_inicial_base64');
+        $fotoRules = $this->photoRules('foto_inicial_base64', $this->requiresPhotoForVehicle((int) $request->input('vehiculo_id')));
 
         $data = $request->validate([
             'vehiculo_id' => ['required', 'integer', Rule::exists('vehiculos', 'id')],
@@ -187,7 +188,7 @@ class RegistroController extends Controller
 
     public function cierre(Request $request, HorometroRegistro $registro): array
     {
-        $fotoRules = $this->photoRules('foto_final', 'foto_final_base64');
+        $fotoRules = $this->photoRules('foto_final_base64', $this->requiresPhotoForVehicle((int) $registro->vehiculo_id));
 
         $data = $request->validate([
             'horometro_final_ocr' => ['nullable', 'numeric', 'min:0'],
@@ -259,13 +260,22 @@ class RegistroController extends Controller
     /**
      * @return array{path: array<int, mixed>}
      */
-    private function photoRules(string $pathField, string $base64Field): array
+    private function photoRules(string $base64Field, bool $requiredByVehicle): array
     {
-        $required = $this->configuracion()->foto_obligatoria ? "required_without:{$base64Field}" : 'nullable';
+        $required = $this->configuracion()->foto_obligatoria && $requiredByVehicle ? "required_without:{$base64Field}" : 'nullable';
 
         return [
             'path' => [$required, 'nullable', 'string', 'max:255'],
         ];
+    }
+
+    private function requiresPhotoForVehicle(int $vehiculoId): bool
+    {
+        $vehiculo = Vehiculo::query()
+            ->with('tipoVehiculo')
+            ->find($vehiculoId);
+
+        return ! str($vehiculo?->tipoVehiculo?->nombre ?? '')->lower()->contains('maquinaria pesada');
     }
 
     private function configuracion(): HorometroConfiguracion

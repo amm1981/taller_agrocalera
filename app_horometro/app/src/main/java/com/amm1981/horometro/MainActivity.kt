@@ -40,6 +40,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -84,6 +85,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
@@ -143,6 +145,7 @@ private val DEFAULT_RESPONSIBLE_PASSWORD = BuildConfig.HOROMETRO_SYNC_PASSWORD
 private val AppBackground = Color(0xFFF6F8F7)
 private val AppGreen = Color(0xFF087A3D)
 private val AppGreenDark = Color(0xFF064E3B)
+private val AppHeaderGreen = Color(0xFF14502D)
 private val AppGreenSoft = Color(0xFFE8F5EA)
 private val AppText = Color(0xFF0F172A)
 private val AppMuted = Color(0xFF64748B)
@@ -377,7 +380,7 @@ class AgroControlApi(private val baseUrl: String) {
                 fullName = "${item.optString("nombres")} ${item.optString("apellidos")}".trim(),
                 type = item.optString("tipo"),
             )
-        }.filter { it.type == "OPERARIO" || it.type == "CONDUCTOR" }
+        }.filter { it.type == "OPERARIO" || it.type == "CONDUCTOR" || it.type == "MAQUINISTA" }
     }
 
     suspend fun pendingRecords(token: String): List<HourmeterRecord> = withContext(Dispatchers.IO) {
@@ -422,7 +425,7 @@ class AgroControlApi(private val baseUrl: String) {
                 ocr = local.initialOcr,
                 manualCorrection = local.manualCorrectionStart,
                 dateTime = local.startDateTime,
-                photoReference = photoReference("inicio", local.vehicleId),
+                photoReference = local.initialPhotoPath?.let { photoReference("inicio", local.vehicleId) },
                 photoPath = local.initialPhotoPath,
             )
         } else {
@@ -446,7 +449,7 @@ class AgroControlApi(private val baseUrl: String) {
                 confirmed = local.finalConfirmed,
                 ocr = local.finalOcr,
                 dateTime = local.finalDateTime ?: currentDateTime(),
-                photoReference = photoReference("cierre", startRecord.id),
+                photoReference = local.finalPhotoPath?.let { photoReference("cierre", startRecord.id) },
                 photoPath = local.finalPhotoPath,
             )
 
@@ -468,7 +471,7 @@ class AgroControlApi(private val baseUrl: String) {
         ocr: String?,
         manualCorrection: Boolean,
         dateTime: String,
-        photoReference: String,
+        photoReference: String?,
         photoPath: String?,
     ): HourmeterRecord = withContext(Dispatchers.IO) {
         require(token.isNotBlank()) { "Sin sesion activa. Sincroniza datos cuando tengas conexion e intenta nuevamente." }
@@ -478,9 +481,12 @@ class AgroControlApi(private val baseUrl: String) {
             .putNullable("client_reference", clientReference)
             .put("fecha", dateTime.substringBefore("T"))
             .put("horometro_inicial_confirmado", confirmed)
-            .put("foto_inicial", photoReference)
             .put("fecha_hora_inicio", dateTime)
             .put("correccion_manual_inicio", manualCorrection)
+
+        if (!photoReference.isNullOrBlank()) {
+            payload.put("foto_inicial", photoReference)
+        }
 
         if (operatorId != null) {
             payload.put("operario_id", operatorId)
@@ -515,16 +521,19 @@ class AgroControlApi(private val baseUrl: String) {
         confirmed: String,
         ocr: String?,
         dateTime: String,
-        photoReference: String,
+        photoReference: String?,
         photoPath: String? = null,
     ): HourmeterRecord = withContext(Dispatchers.IO) {
         require(token.isNotBlank()) { "Sin sesion activa. Sincroniza datos cuando tengas conexion e intenta nuevamente." }
 
         val payload = JSONObject()
             .put("horometro_final_confirmado", confirmed)
-            .put("foto_final", photoReference)
             .put("fecha_hora_final", dateTime)
             .put("correccion_manual_final", !ocr.isNullOrBlank())
+
+        if (!photoReference.isNullOrBlank()) {
+            payload.put("foto_final", photoReference)
+        }
 
         if (!ocr.isNullOrBlank()) {
             payload.put("horometro_final_ocr", ocr)
@@ -1002,7 +1011,11 @@ fun HorometroApp() {
                 }
             },
             onHeavy = {
-                selectedType = RegistrationType.HEAVY
+                if (cachedData == null) {
+                    syncError = "Sincroniza los datos antes de registrar maquinaria pesada."
+                } else {
+                    selectedType = RegistrationType.HEAVY
+                }
             },
         )
 
@@ -1065,8 +1078,6 @@ fun VehicleTypeSelectionScreen(
     onTractors: () -> Unit,
     onHeavy: () -> Unit,
 ) {
-    var selected by remember { mutableStateOf<RegistrationType?>(null) }
-
     Scaffold(
         containerColor = AppBackground,
         bottomBar = {
@@ -1078,27 +1089,6 @@ fun VehicleTypeSelectionScreen(
                     .padding(horizontal = 18.dp, vertical = 14.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                Button(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(52.dp),
-                    enabled = selected != null && hasLocalData,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = AppGreen,
-                        disabledContainerColor = Color(0xFFE2E8F0),
-                        disabledContentColor = Color(0xFF94A3B8),
-                    ),
-                    shape = RoundedCornerShape(16.dp),
-                    onClick = {
-                        when (selected) {
-                            RegistrationType.TRACTORS -> onTractors()
-                            RegistrationType.HEAVY -> onHeavy()
-                            null -> Unit
-                        }
-                    },
-                ) {
-                    Text("Continuar", fontWeight = FontWeight.Black, style = MaterialTheme.typography.titleMedium)
-                }
                 if (!hasLocalData) {
                     Text("Sincroniza datos antes de ingresar al formulario.", color = AppMuted, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall)
                 }
@@ -1133,15 +1123,15 @@ fun VehicleTypeSelectionScreen(
                 title = RegistrationType.TRACTORS.title,
                 subtitle = "Sede, tractor, operario y foto",
                 icon = Icons.Filled.Agriculture,
-                selected = selected == RegistrationType.TRACTORS,
-                onClick = { selected = RegistrationType.TRACTORS },
+                selected = false,
+                onClick = onTractors,
             )
             VehicleOptionCard(
                 title = RegistrationType.HEAVY.title,
                 subtitle = "Login de responsable y equipo",
                 icon = Icons.Filled.Construction,
-                selected = selected == RegistrationType.HEAVY,
-                onClick = { selected = RegistrationType.HEAVY },
+                selected = false,
+                onClick = onHeavy,
             )
             Button(
                 modifier = Modifier
@@ -1180,7 +1170,7 @@ fun AppLogoHeader() {
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(22.dp))
-            .background(Color.White)
+            .background(AppHeaderGreen)
             .padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -1192,6 +1182,7 @@ fun AppLogoHeader() {
                 .weight(1f),
             contentScale = ContentScale.Fit,
             alignment = Alignment.CenterStart,
+            colorFilter = ColorFilter.tint(Color.White),
         )
     }
 }
@@ -1202,33 +1193,33 @@ fun SimpleTopBar(title: String, subtitle: String, onBack: (() -> Unit)? = null, 
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(22.dp))
-            .background(Color.White)
+            .background(AppHeaderGreen)
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (onBack != null) {
             IconButton(onClick = onBack) {
-                Icon(Icons.Filled.ArrowBack, contentDescription = "Volver", tint = AppGreenDark)
+                Icon(Icons.Filled.ArrowBack, contentDescription = "Volver", tint = Color.White)
             }
         } else {
             Box(
                 modifier = Modifier
                     .size(44.dp)
                     .clip(RoundedCornerShape(14.dp))
-                    .background(AppGreenSoft),
+                    .background(Color.White.copy(alpha = 0.14f)),
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(Icons.Filled.Map, contentDescription = null, tint = AppGreen)
+                Icon(Icons.Filled.Map, contentDescription = null, tint = Color.White)
             }
             Spacer(Modifier.width(12.dp))
         }
         Column(Modifier.weight(1f)) {
-            Text(title, color = AppGreenDark, fontWeight = FontWeight.Black, style = MaterialTheme.typography.titleMedium)
-            Text(subtitle, color = AppMuted, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall)
+            Text(title, color = Color.White, fontWeight = FontWeight.Black, style = MaterialTheme.typography.titleMedium)
+            Text(subtitle, color = Color(0xFFEDEBDD), fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall)
         }
         if (onLogout != null) {
             IconButton(onClick = onLogout) {
-                Icon(Icons.Filled.Logout, contentDescription = "Salir", tint = AppGreenDark)
+                Icon(Icons.Filled.Logout, contentDescription = "Salir", tint = Color.White)
             }
         }
     }
@@ -1254,6 +1245,7 @@ fun ResponsibleLoginScreen(
             .background(AppBackground)
             .statusBarsPadding()
             .navigationBarsPadding()
+            .imePadding()
             .verticalScroll(rememberScrollState())
             .padding(18.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -1583,6 +1575,7 @@ fun FieldHomeScreen(
                     )
 
                     FieldTab.Close -> CloseScreen(
+                        registrationType = registrationType,
                         pending = pending,
                         vehicles = vehicles,
                         localRecords = localRecords,
@@ -1922,16 +1915,29 @@ fun StartScreen(
     }
     val filtered = remember(vehicles, sedeId) { vehicles.filter { sedeId != null && it.sedeId == sedeId } }
     val selected = filtered.firstOrNull { it.id == vehicleId }
-    val selectedOperator = operators.firstOrNull { it.id == operatorId }
+    val availableOperators = remember(operators, registrationType) {
+        operators.filter {
+            when (registrationType) {
+                RegistrationType.HEAVY -> it.type.equals("MAQUINISTA", ignoreCase = true)
+                RegistrationType.TRACTORS -> it.type.equals("OPERARIO", ignoreCase = true) || it.type.equals("CONDUCTOR", ignoreCase = true)
+            }
+        }
+    }
+    val selectedOperator = availableOperators.firstOrNull { it.id == operatorId }
     val localValues = localRecords.filter { it.vehicleId == vehicleId }
         .mapNotNull { (it.finalConfirmed ?: it.initialConfirmed).toBigDecimalOrNull() }
         .filter { it > java.math.BigDecimal.ZERO }
     val reference = (localValues + listOfNotNull(selected?.lastValid?.toBigDecimalOrNull()?.takeIf { it > java.math.BigDecimal.ZERO })).maxOrNull()?.toPlainString()
     val validation = readingError(reading, reference, true, config.startToleranceHours)
     val vehicleLabel = if (registrationType == RegistrationType.TRACTORS) "Tractor" else "Vehiculo"
+    val photoRequired = registrationType == RegistrationType.TRACTORS
     BackHandler { onCancel() }
     Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(8.dp),
+        Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .imePadding()
+            .padding(8.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         FormTitle("Registro inicial", registrationType.title, Icons.Filled.Speed)
@@ -1955,14 +1961,14 @@ fun StartScreen(
         )
         SimpleDropdownField(
             label = "Operario",
-            placeholder = "Selecciona conductor",
+            placeholder = if (registrationType == RegistrationType.HEAVY) "Selecciona maquinista" else "Selecciona conductor",
             selectedLabel = selectedOperator?.let { "${it.dni} - ${it.fullName}" },
-            items = operators,
+            items = availableOperators,
             enabled = selected != null,
             icon = Icons.Filled.Badge,
             itemLabel = { "${it.dni} - ${it.fullName}" },
             onSelected = { operatorId = it.id },
-            emptyText = "No hay conductores sincronizados",
+            emptyText = if (registrationType == RegistrationType.HEAVY) "No hay maquinistas sincronizados" else "No hay conductores sincronizados",
             searchable = true,
         )
         if (selected != null) {
@@ -1975,14 +1981,14 @@ fun StartScreen(
                 OutlinedButton(onClick = { showCamera = true }, enabled = validation == null, modifier = Modifier.fillMaxWidth()) {
                     Icon(Icons.Filled.CameraAlt, contentDescription = null)
                     Spacer(Modifier.width(8.dp))
-                    Text(if (photo == null) "Tomar foto de evidencia" else "Repetir foto")
+                    Text(if (photo == null) if (photoRequired) "Tomar foto de evidencia" else "Tomar foto opcional" else "Repetir foto")
                 }
                 photo?.let { CapturedPhotoPreviewCard(it) }
             }
         }
         message?.let { ErrorBox(it) }
         Button(
-            enabled = selected?.referenceSynced == true && operatorId != null && validation == null && photo != null,
+            enabled = selected?.referenceSynced == true && operatorId != null && validation == null && reading.isNotBlank() && (!photoRequired || photo != null),
             modifier = Modifier.fillMaxWidth().height(50.dp),
             onClick = {
                 onRegister(vehicleId!!, operatorId, null, null, null, reading.replace(',', '.'), null, false, currentDateTime(), photo)
@@ -1990,8 +1996,9 @@ fun StartScreen(
         ) {
             Icon(Icons.Filled.CheckCircle, contentDescription = null)
             Spacer(Modifier.width(8.dp))
-            Text("Guardar registro")
+            Text(if (!photoRequired && photo == null) "Guardar sin foto" else "Guardar registro")
         }
+        Spacer(Modifier.height(96.dp))
     }
     if (showCamera) CameraCaptureBottomSheet(
         onBack = { showCamera = false },
@@ -2414,18 +2421,20 @@ fun CloseCaptureReviewCard(
 
 @Composable
 fun CloseScreen(
+    registrationType: RegistrationType,
     pending: List<HourmeterRecord>,
     vehicles: List<Vehicle>,
     localRecords: List<LocalHourmeterRecord>,
     onRefresh: () -> Unit,
     onSendPending: () -> Unit,
-    onCloseLocal: (String, String, String?, String, String) -> Unit,
-    onClose: (Int, String, String?, String, String) -> Unit,
+    onCloseLocal: (String, String, String?, String, String?) -> Unit,
+    onClose: (Int, String, String?, String, String?) -> Unit,
 ) {
     val localPendingSend = localRecords.any { it.status == "PENDIENTE_ENVIO" || it.status == "PENDIENTE_ENVIO_CIERRE" }
     val localPendingClose = localRecords.filter { it.finalConfirmed.isNullOrBlank() }
     val localServerIds = localRecords.mapNotNull { it.serverId }.toSet()
     val remotePending = pending.filterNot { it.id in localServerIds }
+    val photoRequired = registrationType == RegistrationType.TRACTORS
 
     Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -2451,14 +2460,17 @@ fun CloseScreen(
             }
         }
         LazyColumn(
-            modifier = Modifier.weight(1f),
+            modifier = Modifier
+                .weight(1f)
+                .imePadding(),
             verticalArrangement = Arrangement.spacedBy(12.dp),
+            contentPadding = PaddingValues(bottom = 96.dp),
         ) {
             lazyItems(localPendingClose, key = { it.localId }) { record ->
-                LocalPendingCard(record = record, minimum = latestLocalReference(record.vehicleId, record.initialConfirmed, vehicles, localRecords), onClose = onCloseLocal)
+                LocalPendingCard(record = record, minimum = latestLocalReference(record.vehicleId, record.initialConfirmed, vehicles, localRecords), photoRequired = photoRequired, onClose = onCloseLocal)
             }
             lazyItems(remotePending, key = { it.id }) { record ->
-                PendingCard(record = record, minimum = latestLocalReference(record.vehicle?.id ?: 0, record.initial ?: "0", vehicles, localRecords), onClose = onClose)
+                PendingCard(record = record, minimum = latestLocalReference(record.vehicle?.id ?: 0, record.initial ?: "0", vehicles, localRecords), photoRequired = photoRequired, onClose = onClose)
             }
             if (remotePending.isEmpty() && localPendingClose.isEmpty()) {
                 item {
@@ -2486,7 +2498,8 @@ fun CloseScreen(
 fun LocalPendingCard(
     record: LocalHourmeterRecord,
     minimum: String,
-    onClose: (String, String, String?, String, String) -> Unit,
+    photoRequired: Boolean,
+    onClose: (String, String, String?, String, String?) -> Unit,
 ) {
     var draft by remember(record.localId) { mutableStateOf<HourmeterCaptureDraft?>(null) }
     var reading by remember { mutableStateOf("") }
@@ -2546,10 +2559,24 @@ fun LocalPendingCard(
             }
             if (canClose) {
                 if (draft == null) {
+                    val validation = readingError(reading, minimum, false)
                     AppTextField("Horometro de cierre", reading, { reading = it }, KeyboardType.Decimal)
-                    if (reading.isNotBlank()) readingError(reading, minimum, false)?.let { ErrorBox(it) }
+                    if (reading.isNotBlank()) validation?.let { ErrorBox(it) }
+                    if (!photoRequired) {
+                        OutlinedButton(
+                            enabled = validation == null,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(50.dp),
+                            shape = RoundedCornerShape(16.dp),
+                            border = BorderStroke(1.dp, AppGreen),
+                            onClick = { onClose(record.localId, reading.replace(',', '.'), null, currentDateTime(), null) },
+                        ) {
+                            Text("Guardar cierre sin foto", color = AppGreenDark, fontWeight = FontWeight.Black)
+                        }
+                    }
                     Button(
-                        enabled = readingError(reading, minimum, false) == null,
+                        enabled = validation == null,
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(50.dp),
@@ -2559,7 +2586,7 @@ fun LocalPendingCard(
                     ) {
                         Icon(Icons.Filled.CameraAlt, contentDescription = null)
                         Spacer(Modifier.width(8.dp))
-                        Text("Capturar cierre", fontWeight = FontWeight.Black)
+                        Text(if (photoRequired) "Capturar cierre" else "Tomar foto opcional", fontWeight = FontWeight.Black)
                     }
                 } else {
                     CloseCaptureReviewCard(
@@ -2583,7 +2610,8 @@ fun LocalPendingCard(
 fun PendingCard(
     record: HourmeterRecord,
     minimum: String,
-    onClose: (Int, String, String?, String, String) -> Unit,
+    photoRequired: Boolean,
+    onClose: (Int, String, String?, String, String?) -> Unit,
 ) {
     var draft by remember(record.id) { mutableStateOf<HourmeterCaptureDraft?>(null) }
     var reading by remember { mutableStateOf("") }
@@ -2638,10 +2666,24 @@ fun PendingCard(
                 ReadingBox("Horas", record.hours ?: "-", Modifier.weight(1f))
             }
             if (draft == null) {
+                val validation = readingError(reading, minimum, false)
                 AppTextField("Horometro de cierre", reading, { reading = it }, KeyboardType.Decimal)
-                if (reading.isNotBlank()) readingError(reading, minimum, false)?.let { ErrorBox(it) }
+                if (reading.isNotBlank()) validation?.let { ErrorBox(it) }
+                if (!photoRequired) {
+                    OutlinedButton(
+                        enabled = validation == null,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(50.dp),
+                        shape = RoundedCornerShape(16.dp),
+                        border = BorderStroke(1.dp, AppGreen),
+                        onClick = { onClose(record.id, reading.replace(',', '.'), null, currentDateTime(), null) },
+                    ) {
+                        Text("Guardar cierre sin foto", color = AppGreenDark, fontWeight = FontWeight.Black)
+                    }
+                }
                 Button(
-                    enabled = readingError(reading, minimum, false) == null,
+                    enabled = validation == null,
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(50.dp),
@@ -2651,7 +2693,7 @@ fun PendingCard(
                 ) {
                     Icon(Icons.Filled.CameraAlt, contentDescription = null)
                     Spacer(Modifier.width(8.dp))
-                    Text("Capturar cierre", fontWeight = FontWeight.Black)
+                    Text(if (photoRequired) "Capturar cierre" else "Tomar foto opcional", fontWeight = FontWeight.Black)
                 }
             } else {
                 CloseCaptureReviewCard(
@@ -3248,7 +3290,13 @@ fun AppTextField(
     OutlinedTextField(
         modifier = Modifier.fillMaxWidth(),
         value = value,
-        onValueChange = onChange,
+        onValueChange = { input ->
+            if (keyboardType == KeyboardType.Decimal || keyboardType == KeyboardType.Number) {
+                onChange(normalizeNumericInput(input))
+            } else {
+                onChange(input)
+            }
+        },
         label = { Text(label, style = MaterialTheme.typography.bodySmall) },
         keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
         visualTransformation = if (password) PasswordVisualTransformation() else VisualTransformation.None,
@@ -3263,6 +3311,23 @@ fun AppTextField(
             unfocusedContainerColor = Color.White,
         ),
     )
+}
+
+private fun normalizeNumericInput(value: String): String {
+    var hasSeparator = false
+    val sanitized = StringBuilder()
+
+    value.forEach { char ->
+        when {
+            char.isDigit() -> sanitized.append(char)
+            (char == '.' || char == ',') && !hasSeparator -> {
+                sanitized.append(char)
+                hasSeparator = true
+            }
+        }
+    }
+
+    return sanitized.toString()
 }
 
 private fun LocationOption.label(): String {

@@ -66,6 +66,22 @@ class HorometrosApiTest extends TestCase
         $this->assertSame('2500.00', $vehicle->refresh()->horometro_base);
     }
 
+    public function test_heavy_machinery_start_allows_optional_photo(): void
+    {
+        $this->seed(DatabaseSeeder::class);
+        $token = $this->adminToken();
+        $vehicle = Vehiculo::where('codigo', 'MP-001')->firstOrFail();
+        $vehicle->update(['horometro_base' => null]);
+
+        $this->withToken($token)->postJson('/api/horometros/inicio', [
+            'vehiculo_id' => $vehicle->id,
+            'fecha' => '2026-09-01',
+            'fecha_hora_inicio' => '2026-09-01 07:30:00',
+            'horometro_inicial_confirmado' => 1250,
+        ])->assertCreated()
+            ->assertJsonPath('data.foto_inicial', null);
+    }
+
     public function test_closing_from_empty_zero_opening_does_not_create_inflated_hours(): void
     {
         $this->seed(DatabaseSeeder::class);

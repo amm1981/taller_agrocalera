@@ -11,6 +11,7 @@ import { HorometrosValidacionesPage } from '../pages/HorometrosValidacionesPage'
 import { LoginPage } from '../pages/LoginPage'
 import { MaestrosPage } from '../pages/MaestrosPage'
 import { PlaceholderPage } from '../pages/PlaceholderPage'
+import { RolesPage } from '../pages/RolesPage'
 import { TallerBacklogPage } from '../pages/TallerBacklogPage'
 import { TallerDashboardPage } from '../pages/TallerDashboardPage'
 import { TallerOrdenDetallePage } from '../pages/TallerOrdenDetallePage'
@@ -46,6 +47,7 @@ export function AppRoutes() {
         <Route path="/maestros" element={<MaestrosPage />} />
         <Route path="/vehiculos/:id" element={<Vehiculo360Page />} />
         <Route path="/usuarios" element={<UsuariosPage />} />
+        <Route path="/usuarios/roles" element={<RolesPage />} />
         <Route
           path="/configuracion"
           element={

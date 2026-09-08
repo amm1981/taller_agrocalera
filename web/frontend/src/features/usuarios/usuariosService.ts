@@ -1,6 +1,6 @@
 import { api } from '../../api/http'
 import type { PaginatedResponse } from '../../types/api'
-import type { Permission, Role, RolePayload, User, UserFilters, UserPayload } from './types'
+import type { Permission, Role, RoleFilters, RolePayload, User, UserFilters, UserPayload } from './types'
 
 type DataResponse<T> = {
   data: T
@@ -33,11 +33,17 @@ export async function updateUsuario(id: number, payload: UserPayload) {
 }
 
 export async function getRoles() {
-  const { data } = await api.get<PaginatedResponse<Role>>('/roles', {
-    params: { per_page: 100 },
-  })
+  const data = await getRolesPage({ per_page: 100 })
 
   return data.data
+}
+
+export async function getRolesPage(filters?: RoleFilters) {
+  const { data } = await api.get<PaginatedResponse<Role>>('/roles', {
+    params: cleanParams(filters),
+  })
+
+  return data
 }
 
 export async function createRole(payload: RolePayload) {
@@ -50,6 +56,10 @@ export async function updateRole(id: number, payload: RolePayload) {
   const { data } = await api.put<DataResponse<Role>>(`/roles/${id}`, payload)
 
   return data.data
+}
+
+export async function deleteRole(id: number) {
+  await api.delete(`/roles/${id}`)
 }
 
 export async function getPermisos() {

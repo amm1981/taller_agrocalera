@@ -46,12 +46,17 @@ const horometrosNavigation = [
   { label: 'Configuración', icon: SlidersHorizontal, to: '/horometros/configuracion', key: 'configuracion' },
 ]
 
+const usuariosNavigation = [
+  { label: 'Usuarios', icon: Users, to: '/usuarios', key: 'usuarios' },
+  { label: 'Roles', icon: ShieldCheck, to: '/usuarios/roles', key: 'roles' },
+]
+
 const navigation = [
   { label: 'Inicio', icon: Home, to: '/' },
   { label: 'Taller', icon: Wrench, to: '/taller' },
   { label: 'Horómetros', icon: Gauge, to: '/horometros', children: horometrosNavigation },
   { label: 'Maestros', icon: ShieldCheck, to: '/maestros?tab=vehiculos', children: masterNavigation },
-  { label: 'Usuarios', icon: Users, to: '/usuarios' },
+  { label: 'Usuarios', icon: Users, to: '/usuarios', children: usuariosNavigation },
   { label: 'Configuración', icon: Settings, to: '/configuracion' },
 ]
 
@@ -196,8 +201,8 @@ export function AppLayout({
                       const childTab = 'tab' in child ? child.tab : undefined
                       const isChildActive = isMaestros
                         ? location.pathname === '/maestros' && activeTab === childTab
-                        : child.to === '/horometros'
-                          ? location.pathname === '/horometros'
+                        : child.to === item.to
+                          ? location.pathname === child.to
                           : location.pathname.startsWith(child.to)
 
                       return (

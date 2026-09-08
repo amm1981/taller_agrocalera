@@ -52,6 +52,27 @@ class UsuariosApiTest extends TestCase
         $this->assertTrue(User::findOrFail($userId)->hasRole('SUPERVISOR_HOROMETROS'));
     }
 
+    public function test_admin_can_create_user_without_email(): void
+    {
+        $this->seed(DatabaseSeeder::class);
+        $token = $this->adminToken();
+
+        $this
+            ->withToken($token)
+            ->postJson('/api/usuarios', [
+                'name' => 'Luis',
+                'last_name' => 'Quispe',
+                'dni' => '87654321',
+                'username' => 'luis.quispe',
+                'password' => 'admin123',
+                'status' => 'ACTIVO',
+                'roles' => ['USUARIO_CAMPO'],
+            ])
+            ->assertCreated()
+            ->assertJsonPath('data.username', 'luis.quispe')
+            ->assertJsonPath('data.email', 'luis.quispe@agrocontrol.local');
+    }
+
     public function test_admin_can_update_role_permissions(): void
     {
         $this->seed(DatabaseSeeder::class);
@@ -69,6 +90,44 @@ class UsuariosApiTest extends TestCase
             ->assertJsonFragment(['name' => 'horometros.registrar']);
 
         $this->assertTrue($role->refresh()->hasPermissionTo('horometros.registrar'));
+    }
+
+    public function test_admin_can_delete_unassigned_roles_only(): void
+    {
+        $this->seed(DatabaseSeeder::class);
+        $token = $this->adminToken();
+
+        $roleId = $this
+            ->withToken($token)
+            ->postJson('/api/roles', [
+                'name' => 'ROL_TEMPORAL',
+                'permissions' => ['horometros.ver'],
+            ])
+            ->assertCreated()
+            ->json('data.id');
+
+        $this
+            ->withToken($token)
+            ->deleteJson("/api/roles/{$roleId}")
+            ->assertNoContent();
+
+        $assignedRole = Role::where('name', 'USUARIO_CAMPO')->firstOrFail();
+        User::factory()->create([
+            'email' => 'campo.asignado@agrocontrol.local',
+            'username' => 'campo.asignado',
+        ])->assignRole($assignedRole);
+
+        $this
+            ->withToken($token)
+            ->deleteJson("/api/roles/{$assignedRole->id}")
+            ->assertUnprocessable();
+
+        $adminRole = Role::where('name', 'ADMINISTRADOR')->firstOrFail();
+
+        $this
+            ->withToken($token)
+            ->deleteJson("/api/roles/{$adminRole->id}")
+            ->assertUnprocessable();
     }
 
     private function adminToken(): string

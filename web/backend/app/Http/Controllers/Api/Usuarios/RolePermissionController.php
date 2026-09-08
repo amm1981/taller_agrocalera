@@ -4,6 +4,8 @@ namespace App\Http\Controllers\Api\Usuarios;
 
 use App\Http\Controllers\Api\Concerns\FormatsApiPagination;
 use App\Http\Controllers\Controller;
+use Illuminate\Http\Response;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
@@ -15,11 +17,12 @@ class RolePermissionController extends Controller
 {
     use FormatsApiPagination;
 
-    public function roles(): array
+    public function roles(Request $request): array
     {
         return $this->paginated(
             Role::query()
                 ->with('permissions:id,name')
+                ->when($request->string('q')->toString(), fn ($query, string $search) => $query->where('name', 'like', "%{$search}%"))
                 ->orderBy('name')
                 ->paginate($this->perPage()),
         );
@@ -48,6 +51,30 @@ class RolePermissionController extends Controller
         app(PermissionRegistrar::class)->forgetCachedPermissions();
 
         return response()->json(['data' => $role->refresh()->load('permissions:id,name')]);
+    }
+
+    public function destroyRole(Role $role): Response|JsonResponse
+    {
+        if ($role->name === 'ADMINISTRADOR') {
+            return response()->json([
+                'message' => 'No se puede eliminar el rol administrador.',
+            ], 422);
+        }
+
+        $assignedUsers = DB::table(config('permission.table_names.model_has_roles'))
+            ->where('role_id', $role->id)
+            ->exists();
+
+        if ($assignedUsers) {
+            return response()->json([
+                'message' => 'No se puede eliminar un rol asignado a usuarios.',
+            ], 422);
+        }
+
+        $role->delete();
+        app(PermissionRegistrar::class)->forgetCachedPermissions();
+
+        return response()->noContent();
     }
 
     public function permissions(): array

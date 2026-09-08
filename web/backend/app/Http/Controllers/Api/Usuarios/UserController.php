@@ -42,6 +42,7 @@ class UserController extends Controller
 
     public function store(Request $request): JsonResponse
     {
+        $this->ensureEmailForValidation($request);
         $data = $request->validate($this->rules());
         $roles = $data['roles'] ?? [];
         unset($data['roles']);
@@ -56,6 +57,7 @@ class UserController extends Controller
 
     public function update(Request $request, User $usuario): JsonResponse
     {
+        $this->ensureEmailForValidation($request);
         $data = $request->validate($this->rules($usuario->id, updating: true));
         $roles = $data['roles'] ?? null;
         unset($data['roles']);
@@ -85,11 +87,27 @@ class UserController extends Controller
             'last_name' => ['nullable', 'string', 'max:120'],
             'dni' => ['nullable', 'string', 'max:20', Rule::unique('users', 'dni')->ignore($ignoreId)],
             'username' => ['required', 'string', 'max:80', Rule::unique('users', 'username')->ignore($ignoreId)],
-            'email' => ['required', 'email', 'max:160', Rule::unique('users', 'email')->ignore($ignoreId)],
+            'email' => ['nullable', 'email', 'max:160', Rule::unique('users', 'email')->ignore($ignoreId)],
             'password' => [$updating ? 'nullable' : 'required', 'string', 'min:8', 'max:120'],
             'status' => ['required', Rule::in(['ACTIVO', 'INACTIVO'])],
             'roles' => ['nullable', 'array'],
             'roles.*' => ['string', Rule::exists('roles', 'name')],
         ];
+    }
+
+    private function defaultEmail(string $username): string
+    {
+        return "{$username}@agrocontrol.local";
+    }
+
+    private function ensureEmailForValidation(Request $request): void
+    {
+        if ($request->filled('email') || ! $request->filled('username')) {
+            return;
+        }
+
+        $request->merge([
+            'email' => $this->defaultEmail($request->string('username')->toString()),
+        ]);
     }
 }

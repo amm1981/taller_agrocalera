@@ -15,7 +15,7 @@ export type User = {
   last_name: string | null
   dni: string | null
   username: string
-  email: string
+  email: string | null
   status: 'ACTIVO' | 'INACTIVO'
   roles?: Role[]
 }
@@ -27,12 +27,18 @@ export type UserFilters = {
   per_page?: number
 }
 
+export type RoleFilters = {
+  q?: string
+  page?: number
+  per_page?: number
+}
+
 export type UserPayload = {
   name: string
   last_name: string | null
   dni: string | null
   username: string
-  email: string
+  email: string | null
   password?: string | null
   status: 'ACTIVO' | 'INACTIVO'
   roles: string[]

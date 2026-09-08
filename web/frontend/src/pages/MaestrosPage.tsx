@@ -21,7 +21,7 @@ import {
   Wrench,
   X,
 } from 'lucide-react'
-import type { ComponentType, SVGProps } from 'react'
+import type { ComponentType, ReactNode, SVGProps } from 'react'
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { Button } from '../components/ui/button'
@@ -384,7 +384,7 @@ export function MaestrosPage() {
   const { session } = useAuth()
   const [searchParams] = useSearchParams()
   const activeTab = parseMasterTab(searchParams.get('tab'))
-  const [filters, setFilters] = useState({ q: '', estado: '', per_page: 50 })
+  const [filters, setFilters] = useState({ q: '', estado: '', per_page: 50, page: 1 })
   const [editing, setEditing] = useState<MasterRecord | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<VehiculoMaster | null>(null)
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false)
@@ -441,7 +441,7 @@ export function MaestrosPage() {
     setIsFormOpen(false)
     setSelectedVehicleIds([])
     setBulkDeleteSummary(null)
-    setFilters({ q: '', estado: '', per_page: 50 })
+    setFilters({ q: '', estado: '', per_page: 50, page: 1 })
   }, [activeTab])
 
   useEffect(() => {
@@ -530,6 +530,10 @@ export function MaestrosPage() {
     queryFn: () => getVehicleMeasurementPointHistory(historyVehicle!.id),
     enabled: Boolean(historyVehicle),
   })
+
+  const updateFilter = (field: 'q' | 'estado', value: string) => {
+    setFilters((current) => ({ ...current, [field]: value, page: 1 }))
+  }
 
   const importPersonal = useMutation({
     mutationFn: () => {
@@ -714,20 +718,20 @@ export function MaestrosPage() {
                   <input
                     className={`${inputClass} w-full pl-9`}
                     value={filters.q}
-                    onChange={(event) => setFilters((current) => ({ ...current, q: event.target.value }))}
+                    onChange={(event) => updateFilter('q', event.target.value)}
                     placeholder="Código, nombre, DNI o placa"
                   />
                 </div>
               </FilterField>
               <FilterField label="Estado">
-                <select className={inputClass} value={filters.estado} onChange={(event) => setFilters((current) => ({ ...current, estado: event.target.value }))}>
+                <select className={inputClass} value={filters.estado} onChange={(event) => updateFilter('estado', event.target.value)}>
                   <option value="">Todos</option>
                   <option value="ACTIVO">Activo</option>
                   <option value="INACTIVO">Inactivo</option>
                 </select>
               </FilterField>
               <div className="flex items-end">
-                <Button variant="secondary" className="w-full" onClick={() => setFilters({ q: '', estado: '', per_page: 50 })}>
+                <Button variant="secondary" className="w-full" onClick={() => setFilters({ q: '', estado: '', per_page: 50, page: 1 })}>
                   Limpiar
                 </Button>
               </div>
@@ -797,6 +801,15 @@ export function MaestrosPage() {
           onOpenHistory={(vehicle) => setHistoryVehicle(vehicle)}
           onOpenQr={(vehicle) => setSelectedQrVehicle(vehicle)}
         />
+
+        <PaginationBar
+          currentPage={records.data?.meta.current_page ?? 1}
+          lastPage={records.data?.meta.last_page ?? 1}
+          perPage={records.data?.meta.per_page ?? filters.per_page}
+          total={records.data?.meta.total ?? 0}
+          showing={records.data?.data.length ?? 0}
+          onPageChange={(page) => setFilters((current) => ({ ...current, page }))}
+        />
       </div>
 
       <VehicleQrModal
@@ -857,6 +870,76 @@ export function MaestrosPage() {
         />
       ) : null}
     </AppLayout>
+  )
+}
+
+function PaginationBar({
+  currentPage,
+  lastPage,
+  perPage,
+  total,
+  showing,
+  onPageChange,
+}: {
+  currentPage: number
+  lastPage: number
+  perPage: number
+  total: number
+  showing: number
+  onPageChange: (page: number) => void
+}) {
+  const start = total === 0 ? 0 : ((currentPage - 1) * perPage) + 1
+  const end = Math.min((currentPage - 1) * perPage + showing, total)
+
+  return (
+    <section className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-500 shadow-[0_12px_30px_rgba(15,23,42,0.04)]">
+      <span>
+        Mostrando {start}-{end} de {total} registros
+      </span>
+      <div className="flex items-center gap-2">
+        <Button
+          variant="secondary"
+          disabled={currentPage <= 1}
+          onClick={() => onPageChange(currentPage - 1)}
+        >
+          Anterior
+        </Button>
+        <span className="rounded-md bg-emerald-700 px-3 py-2 font-black text-white">
+          {currentPage} / {lastPage}
+        </span>
+        <Button
+          variant="secondary"
+          disabled={currentPage >= lastPage}
+          onClick={() => onPageChange(currentPage + 1)}
+        >
+          Siguiente
+        </Button>
+      </div>
+    </section>
+  )
+}
+
+function ActionIconButton({
+  title,
+  ariaLabel,
+  onClick,
+  children,
+}: {
+  title: string
+  ariaLabel: string
+  onClick: () => void
+  children: ReactNode
+}) {
+  return (
+    <button
+      type="button"
+      className="inline-flex items-center justify-center p-1 text-slate-600 transition-colors hover:text-emerald-700 focus:outline-none focus-visible:rounded focus-visible:ring-2 focus-visible:ring-emerald-600"
+      title={title}
+      aria-label={ariaLabel}
+      onClick={onClick}
+    >
+      {children}
+    </button>
   )
 }
 
@@ -1156,31 +1239,31 @@ function MasterTable({
                   <td key={`${record.id}-${index}`} className="px-4 py-3 align-top text-slate-700">{cell}</td>
                 ))}
                 <td className="px-4 py-3 align-top">
-                  <div className="flex flex-wrap gap-2">
-                    <Button variant="secondary" onClick={() => onEdit(record)}>
-                      <Pencil className="h-4 w-4" aria-hidden="true" />
-                      Editar
-                    </Button>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <ActionIconButton
+                      title="Editar"
+                      ariaLabel={`Editar ${recordTitle(record)}`}
+                      onClick={() => onEdit(record)}
+                    >
+                      <Pencil className="h-5 w-5 text-slate-700" aria-hidden="true" />
+                    </ActionIconButton>
                     {tab === 'vehiculos' && 'tipo_vehiculo' in record ? (
-                      <Button
-                        variant="secondary"
-                        onClick={() => onOpenHistory?.(record as VehiculoMaster)}
+                      <ActionIconButton
                         title="Historial de punto de medida"
-                        aria-label={`Ver historial de punto de medida de ${recordTitle(record)}`}
+                        ariaLabel={`Ver historial de punto de medida de ${recordTitle(record)}`}
+                        onClick={() => onOpenHistory?.(record as VehiculoMaster)}
                       >
-                        <History className="h-4 w-4 text-blue-700" aria-hidden="true" />
-                      </Button>
+                        <History className="h-5 w-5 text-blue-700" aria-hidden="true" />
+                      </ActionIconButton>
                     ) : null}
                     {tab === 'vehiculos' && canDeleteVehicles && 'tipo_vehiculo' in record ? (
-                      <Button
-                        variant="secondary"
-                        className="border-red-200 text-red-700 hover:bg-red-50"
-                        onClick={() => onDeleteVehicle?.(record as VehiculoMaster)}
+                      <ActionIconButton
                         title="Eliminar vehículo"
-                        aria-label={`Eliminar vehículo ${recordTitle(record)}`}
+                        ariaLabel={`Eliminar vehículo ${recordTitle(record)}`}
+                        onClick={() => onDeleteVehicle?.(record as VehiculoMaster)}
                       >
-                        <Trash2 className="h-4 w-4" aria-hidden="true" />
-                      </Button>
+                        <Trash2 className="h-5 w-5 text-red-700" aria-hidden="true" />
+                      </ActionIconButton>
                     ) : null}
                   </div>
                 </td>

@@ -217,11 +217,11 @@ export function HorometrosRegistrosPage() {
                       <button
                         type="button"
                         onClick={() => setDeleteTarget(registro)}
-                        className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-red-100 bg-white text-red-600 transition-colors hover:bg-red-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500"
+                        className="inline-flex items-center justify-center p-1.5 text-red-600 transition-colors hover:text-red-700 focus:outline-none focus-visible:rounded focus-visible:ring-2 focus-visible:ring-red-500"
                         title="Eliminar registro"
                         aria-label="Eliminar registro"
                       >
-                        <Trash2 className="h-4 w-4" aria-hidden="true" />
+                        <Trash2 className="h-5 w-5" aria-hidden="true" />
                       </button>
                     ) : null}
                     </div>

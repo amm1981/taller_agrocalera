@@ -493,7 +493,10 @@ class MaestrosApiTest extends TestCase
         $this->assertNotFalse($zip->locateName('xl/worksheets/sheet1.xml'));
         $this->assertNotFalse($zip->locateName('xl/worksheets/sheet2.xml'));
         $this->assertStringContainsString('dataValidation', $zip->getFromName('xl/worksheets/sheet1.xml'));
-        $this->assertStringContainsString('FF1D4ED8', $zip->getFromName('xl/styles.xml'));
+        $styles = $zip->getFromName('xl/styles.xml');
+        $this->assertStringContainsString('<fills count="3">', $styles);
+        $this->assertStringContainsString('FF1D4ED8', $styles);
+        $this->assertStringContainsString('fontId="1" fillId="2"', $styles);
 
         $zip->close();
         unlink($path);
@@ -519,7 +522,10 @@ class MaestrosApiTest extends TestCase
 
         $this->assertStringContainsString('punto_medida', $sheet);
         $this->assertStringContainsString('punto_medida_vigente_desde', $sheet);
-        $this->assertStringContainsString('FF1D4ED8', $zip->getFromName('xl/styles.xml'));
+        $styles = $zip->getFromName('xl/styles.xml');
+        $this->assertStringContainsString('<fills count="3">', $styles);
+        $this->assertStringContainsString('FF1D4ED8', $styles);
+        $this->assertStringContainsString('fontId="1" fillId="2"', $styles);
 
         $zip->close();
         unlink($path);

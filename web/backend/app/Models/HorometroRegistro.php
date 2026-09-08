@@ -2,6 +2,8 @@
 
 namespace App\Models;
 
+use Carbon\CarbonImmutable;
+use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -22,6 +24,8 @@ class HorometroRegistro extends Model
         'client_reference',
         'vehiculo_id',
         'fecha',
+        'semana_iso',
+        'semana_anio',
         'operario_id',
         'usuario_responsable_id',
         'fundo_id',
@@ -47,6 +51,8 @@ class HorometroRegistro extends Model
     {
         return [
             'fecha' => 'date',
+            'semana_iso' => 'integer',
+            'semana_anio' => 'integer',
             'fecha_hora_inicio' => 'datetime',
             'fecha_hora_final' => 'datetime',
             'correccion_manual_inicio' => 'boolean',
@@ -57,6 +63,29 @@ class HorometroRegistro extends Model
             'horometro_final_confirmado' => 'decimal:2',
             'horas_trabajadas' => 'decimal:2',
         ];
+    }
+
+    protected static function booted(): void
+    {
+        static::saving(function (HorometroRegistro $registro): void {
+            $registro->syncIsoWeek();
+        });
+    }
+
+    public function syncIsoWeek(): void
+    {
+        $date = $this->fecha ?? $this->fecha_hora_inicio ?? $this->fecha_hora_final;
+
+        if (! $date) {
+            return;
+        }
+
+        $fecha = $date instanceof CarbonInterface
+            ? CarbonImmutable::instance($date)
+            : CarbonImmutable::parse($date);
+
+        $this->semana_iso = $fecha->isoWeek();
+        $this->semana_anio = $fecha->isoWeekYear();
     }
 
     public function vehiculo(): BelongsTo

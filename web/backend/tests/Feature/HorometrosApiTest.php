@@ -467,6 +467,126 @@ class HorometrosApiTest extends TestCase
         $this->assertStringNotContainsString('800', $sheet);
     }
 
+    public function test_hourmeter_records_are_marked_with_iso_week(): void
+    {
+        $this->seed(DatabaseSeeder::class);
+        $token = $this->adminToken();
+        $vehicle = Vehiculo::where('codigo', 'TR-015')->firstOrFail();
+        $vehicle->update(['horometro_base' => null]);
+
+        $recordId = $this
+            ->withToken($token)
+            ->postJson('/api/horometros/inicio', [
+                'vehiculo_id' => $vehicle->id,
+                'fecha' => '2026-09-07',
+                'fecha_hora_inicio' => '2026-09-07 07:30:00',
+                'horometro_inicial_confirmado' => 2500,
+                'foto_inicial' => 'evidence.jpg',
+            ])
+            ->assertCreated()
+            ->json('data.id');
+
+        $this->assertDatabaseHas('horometro_registros', [
+            'id' => $recordId,
+            'semana_iso' => 37,
+            'semana_anio' => 2026,
+        ]);
+    }
+
+    public function test_sap_export_generates_measurement_rows(): void
+    {
+        $this->seed(DatabaseSeeder::class);
+        $sede = Sede::query()->firstOrFail();
+        $sede->update(['codigo' => '1503']);
+        $vehicle = Vehiculo::where('codigo', 'TR-015')->firstOrFail();
+        $vehicle->update([
+            'codigo' => 'C-61',
+            'placa' => 'C-61',
+            'sede_id' => $sede->id,
+            'punto_medida' => '1139',
+        ]);
+
+        HorometroRegistro::query()->create([
+            'vehiculo_id' => $vehicle->id,
+            'fecha' => '2026-09-07',
+            'punto_medida' => '1139',
+            'horometro_inicial_confirmado' => 100,
+            'foto_inicial' => 'inicio.jpg',
+            'fecha_hora_inicio' => '2026-09-07 07:15:00',
+            'horometro_final_confirmado' => 108,
+            'foto_final' => 'final.jpg',
+            'fecha_hora_final' => '2026-09-07 18:10:00',
+            'horas_trabajadas' => 8,
+            'estado' => 'COMPLETO',
+        ]);
+
+        $response = $this
+            ->withToken($this->adminToken())
+            ->get('/api/horometros/registros/exportable-sap?semana_anio=2026&semana_iso=37');
+
+        $response->assertOk();
+        $response->assertHeader('content-type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+
+        $path = tempnam(sys_get_temp_dir(), 'sap_export_');
+        file_put_contents($path, $response->streamedContent());
+
+        $zip = new ZipArchive;
+        $this->assertTrue($zip->open($path));
+        $sheet = $zip->getFromName('xl/worksheets/sheet1.xml');
+        $zip->close();
+        unlink($path);
+
+        $this->assertIsString($sheet);
+        $this->assertStringContainsString('Equipo ComP.', $sheet);
+        $this->assertStringContainsString('Centro Planificacion', $sheet);
+        $this->assertStringContainsString('C-61', $sheet);
+        $this->assertStringContainsString('1139', $sheet);
+        $this->assertStringContainsString('SEM 37 1503 792026', $sheet);
+        $this->assertStringContainsString('108', $sheet);
+    }
+
+    public function test_sap_report_api_requires_bearer_token_and_returns_rows(): void
+    {
+        config(['services.horometros_sap_report.token' => 'sap-token-test']);
+        $this->seed(DatabaseSeeder::class);
+        $sede = Sede::query()->firstOrFail();
+        $sede->update(['codigo' => '1503']);
+        $vehicle = Vehiculo::where('codigo', 'TR-015')->firstOrFail();
+        $vehicle->update([
+            'codigo' => 'C-61',
+            'placa' => 'C-61',
+            'sede_id' => $sede->id,
+            'punto_medida' => '1139',
+        ]);
+        HorometroRegistro::query()->create([
+            'vehiculo_id' => $vehicle->id,
+            'fecha' => '2026-09-07',
+            'punto_medida' => '1139',
+            'horometro_inicial_confirmado' => 100,
+            'foto_inicial' => 'inicio.jpg',
+            'fecha_hora_inicio' => '2026-09-07 07:15:00',
+            'estado' => 'EN_JORNADA',
+        ]);
+
+        $this
+            ->getJson('/api/integraciones/horometros/exportable-sap?fecha=2026-09-07')
+            ->assertUnauthorized();
+
+        $row = $this
+            ->withHeader('Authorization', 'Bearer sap-token-test')
+            ->getJson('/api/integraciones/horometros/exportable-sap?fecha=2026-09-07')
+            ->assertOk()
+            ->json('data.0');
+
+        $this->assertSame('C-61', $row['Equipo ComP.']);
+        $this->assertSame('1503', $row['Centro Planificacion']);
+        $this->assertSame('1139', $row['Punto de Medida']);
+        $this->assertSame('H', $row['UM Entrada de Documento']);
+        $this->assertSame('07/09/2026', $row['Fecha de Medición']);
+        $this->assertSame('07:15:00', $row['Hora de Medición']);
+        $this->assertSame('C-61 SEM 37 1503 792026', $row['texto Medicion']);
+    }
+
     public function test_only_admin_can_delete_hourmeter_records(): void
     {
         config(['filesystems.evidence_disk' => 'public']);

@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\Horometros;
 
 use App\Domain\Horometros\Services\HorometroService;
+use App\Domain\Horometros\Services\HorometroSapReportService;
 use App\Http\Controllers\Api\Concerns\FormatsApiPagination;
 use App\Http\Controllers\Controller;
 use App\Models\HorometroConfiguracion;
@@ -24,7 +25,10 @@ class RegistroController extends Controller
 {
     use FormatsApiPagination;
 
-    public function __construct(private readonly HorometroService $service) {}
+    public function __construct(
+        private readonly HorometroService $service,
+        private readonly HorometroSapReportService $sapReport,
+    ) {}
 
     public function index(Request $request): array
     {
@@ -38,6 +42,8 @@ class RegistroController extends Controller
         $headers = [
             'ID',
             'Fecha',
+            'Año semana ISO',
+            'Semana ISO',
             'Vehículo',
             'Placa',
             'Tipo vehículo',
@@ -68,6 +74,8 @@ class RegistroController extends Controller
             ->map(fn (HorometroRegistro $registro): array => [
                 $registro->id,
                 $registro->fecha?->format('d/m/Y'),
+                $registro->semana_anio,
+                $registro->semana_iso,
                 $registro->vehiculo ? "{$registro->vehiculo->codigo} - {$registro->vehiculo->nombre}" : null,
                 $registro->vehiculo?->placa,
                 $registro->vehiculo?->tipoVehiculo?->nombre,
@@ -94,6 +102,18 @@ class RegistroController extends Controller
 
         $path = SimpleXlsx::createTemplate($headers, $rows, sheetName: 'Registros');
         $fileName = 'horometros-registros-'.now()->format('Ymd-His').'.xlsx';
+
+        return response()->download(
+            $path,
+            $fileName,
+            ['Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
+        )->deleteFileAfterSend(true);
+    }
+
+    public function exportSap(Request $request): BinaryFileResponse
+    {
+        $path = $this->sapReport->createSpreadsheet($request);
+        $fileName = 'horometros-exportable-sap-'.now()->format('Ymd-His').'.xlsx';
 
         return response()->download(
             $path,
@@ -233,48 +253,7 @@ class RegistroController extends Controller
 
     private function baseQuery(Request $request): Builder
     {
-        $query = HorometroRegistro::query()
-            ->with(['vehiculo.tipoVehiculo', 'vehiculo.sede', 'operario', 'usuarioResponsable', 'fundo.sede', 'sector', 'lote'])
-            ->when($request->integer('vehiculo_id'), fn (Builder $q, int $vehiculoId) => $q->where('vehiculo_id', $vehiculoId))
-            ->when($request->integer('operario_id'), fn (Builder $q, int $operarioId) => $q->where('operario_id', $operarioId))
-            ->when($request->integer('usuario_responsable_id'), fn (Builder $q, int $usuarioId) => $q->where('usuario_responsable_id', $usuarioId))
-            ->when($request->integer('fundo_id'), fn (Builder $q, int $fundoId) => $q->where('fundo_id', $fundoId))
-            ->when($request->integer('sector_id'), fn (Builder $q, int $sectorId) => $q->where('sector_id', $sectorId))
-            ->when($request->integer('lote_id'), fn (Builder $q, int $loteId) => $q->where('lote_id', $loteId))
-            ->when($request->string('estado')->toString(), fn (Builder $q, string $estado) => $q->where('estado', $estado))
-            ->when($request->integer('tipo_vehiculo_id'), function (Builder $q, int $tipoId) {
-                $q->whereHas('vehiculo', fn (Builder $vehiculo) => $vehiculo->where('tipo_vehiculo_id', $tipoId));
-            })
-            ->when($request->filled('correccion_manual'), function (Builder $q) use ($request) {
-                $value = filter_var($request->input('correccion_manual'), FILTER_VALIDATE_BOOLEAN);
-                $q->where(function (Builder $subquery) use ($value) {
-                    $subquery->where('correccion_manual_inicio', $value)
-                        ->orWhere('correccion_manual_final', $value);
-                });
-            })
-            ->when($request->filled('con_foto'), function (Builder $q) use ($request) {
-                $value = filter_var($request->input('con_foto'), FILTER_VALIDATE_BOOLEAN);
-                if ($value) {
-                    $q->where(function (Builder $subquery) {
-                        $subquery->whereNotNull('foto_inicial')
-                            ->orWhereNotNull('foto_final');
-                    });
-                } else {
-                    $q->whereNull('foto_inicial')->whereNull('foto_final');
-                }
-            })
-            ->when($request->filled('fecha'), fn (Builder $q) => $q->whereDate('fecha', $request->input('fecha')))
-            ->when($request->filled('fecha_desde'), fn (Builder $q) => $q->whereDate('fecha', '>=', $request->input('fecha_desde')))
-            ->when($request->filled('fecha_hasta'), fn (Builder $q) => $q->whereDate('fecha', '<=', $request->input('fecha_hasta')));
-
-        $query->when($request->integer('sede_id'), function (Builder $q, int $sedeId) {
-            $q->where(function (Builder $query) use ($sedeId) {
-                $query->whereHas('fundo', fn (Builder $fundo) => $fundo->where('sede_id', $sedeId))
-                    ->orWhereHas('vehiculo', fn (Builder $vehiculo) => $vehiculo->where('sede_id', $sedeId));
-            });
-        });
-
-        return $query;
+        return $this->sapReport->query($request);
     }
 
     /**

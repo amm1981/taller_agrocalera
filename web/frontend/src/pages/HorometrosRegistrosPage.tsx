@@ -10,7 +10,7 @@ import {
   getSedesMaster,
   getTiposVehiculoMaster,
 } from '../features/maestros/maestrosService'
-import { deleteHorometroRegistro, exportHorometroRegistros, getHorometroRegistros } from '../features/horometros/horometrosService'
+import { deleteHorometroRegistro, exportHorometroRegistros, exportHorometroSap, getHorometroRegistros } from '../features/horometros/horometrosService'
 import type { HorometroFilters, HorometroRegistro } from '../features/horometros/types'
 import { StatusBadge } from '../features/taller/components/StatusBadge'
 import { FilterField, inputClass } from '../features/taller/components/FilterField'
@@ -44,6 +44,19 @@ export function HorometrosRegistrosPage() {
       const link = document.createElement('a')
       link.href = url
       link.download = `horometros-registros-${new Date().toISOString().slice(0, 10)}.xlsx`
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      window.URL.revokeObjectURL(url)
+    },
+  })
+  const exportSapMutation = useMutation({
+    mutationFn: () => exportHorometroSap(filters),
+    onSuccess: (blob) => {
+      const url = window.URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `horometros-exportable-sap-${new Date().toISOString().slice(0, 10)}.xlsx`
       document.body.appendChild(link)
       link.click()
       link.remove()
@@ -102,6 +115,15 @@ export function HorometrosRegistrosPage() {
               {(tiposVehiculo.data ?? []).map((item) => <option key={item.id} value={item.id}>{item.nombre}</option>)}
             </select>
           </FilterField>
+          <FilterField label="Año semana ISO">
+            <input className={inputClass} type="number" min="2000" max="2100" placeholder="2026" value={filters.semana_anio ?? ''} onChange={(event) => updateFilter('semana_anio', event.target.value)} />
+          </FilterField>
+          <FilterField label="Semana ISO">
+            <select className={inputClass} value={filters.semana_iso ?? ''} onChange={(event) => updateFilter('semana_iso', event.target.value)}>
+              <option value="">Todas</option>
+              {Array.from({ length: 53 }, (_, index) => index + 1).map((week) => <option key={week} value={week}>{week}</option>)}
+            </select>
+          </FilterField>
           <FilterField label="Vehículo">
             <select className={inputClass} value={filters.vehiculo_id ?? ''} onChange={(event) => updateFilter('vehiculo_id', event.target.value)}>
               <option value="">Todos</option>
@@ -153,6 +175,14 @@ export function HorometrosRegistrosPage() {
               <Download className="h-4 w-4 text-white" aria-hidden="true" />
               Exportar
             </Button>
+            <Button
+              className="flex-1 bg-[#0e5631] text-white hover:bg-[#0b4729]"
+              onClick={() => exportSapMutation.mutate()}
+              disabled={exportSapMutation.isPending}
+            >
+              <Download className="h-4 w-4 text-white" aria-hidden="true" />
+              Exportable SAP
+            </Button>
           </div>
         </div>
       </section>
@@ -163,6 +193,7 @@ export function HorometrosRegistrosPage() {
             <thead className="bg-slate-50 text-xs font-bold uppercase text-slate-500">
               <tr>
                 <th className="border-b border-slate-200 px-4 py-3">Fecha</th>
+                <th className="border-b border-slate-200 px-4 py-3">Semana</th>
                 <th className="border-b border-slate-200 px-4 py-3">Vehículo</th>
                 <th className="border-b border-slate-200 px-4 py-3">Ubicación</th>
                 <th className="border-b border-slate-200 px-4 py-3">Punto medida</th>
@@ -177,6 +208,7 @@ export function HorometrosRegistrosPage() {
               {(registros.data?.data ?? []).map((registro) => (
                 <tr key={registro.id} className="hover:bg-slate-50">
                   <td className="px-4 py-3 align-top font-medium text-slate-700">{formatDateTime(registro.fecha_hora_inicio ?? registro.fecha)}</td>
+                  <td className="px-4 py-3 align-top font-bold text-slate-700">{formatSemana(registro)}</td>
                   <td className="px-4 py-3 align-top">
                     <div className="font-bold text-slate-950">{vehicleName(registro.vehiculo)}</div>
                     <div className="text-xs font-medium text-slate-500">{registro.vehiculo?.placa ?? 'Sin placa'}</div>
@@ -230,7 +262,7 @@ export function HorometrosRegistrosPage() {
               ))}
               {!registros.isLoading && !registros.data?.data.length ? (
                 <tr>
-                  <td colSpan={9} className="px-4 py-10 text-center text-sm text-slate-500">No hay registros para los filtros seleccionados.</td>
+                  <td colSpan={10} className="px-4 py-10 text-center text-sm text-slate-500">No hay registros para los filtros seleccionados.</td>
                 </tr>
               ) : null}
             </tbody>
@@ -365,4 +397,12 @@ function Detail({ label, value }: { label: string; value: string | number }) {
       <div className="mt-1 font-semibold text-slate-900">{value}</div>
     </div>
   )
+}
+
+function formatSemana(registro: HorometroRegistro) {
+  if (!registro.semana_iso || !registro.semana_anio) {
+    return '-'
+  }
+
+  return `SEM ${registro.semana_iso} / ${registro.semana_anio}`
 }

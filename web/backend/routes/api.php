@@ -6,6 +6,7 @@ use App\Http\Controllers\Api\Horometros\DashboardController as HorometrosDashboa
 use App\Http\Controllers\Api\Horometros\ReaperturaController as HorometrosReaperturaController;
 use App\Http\Controllers\Api\Horometros\RegistroController as HorometrosRegistroController;
 use App\Http\Controllers\Api\Horometros\ReporteController as HorometrosReporteController;
+use App\Http\Controllers\Api\Horometros\SapReportController;
 use App\Http\Controllers\Api\Maestros\CatalogController;
 use App\Http\Controllers\Api\Maestros\PersonalController;
 use App\Http\Controllers\Api\Maestros\VehiculoController;
@@ -23,6 +24,8 @@ Route::get('/health', fn () => [
     'status' => 'ok',
     'service' => 'agrocontrol-api',
 ]);
+
+Route::get('/integraciones/horometros/exportable-sap', SapReportController::class);
 
 Route::prefix('auth')->group(function () {
     Route::post('/login', [AuthController::class, 'login']);
@@ -137,6 +140,7 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/dashboard', HorometrosDashboardController::class);
             Route::get('/registros', [HorometrosRegistroController::class, 'index']);
             Route::get('/registros/export', [HorometrosRegistroController::class, 'export']);
+            Route::get('/registros/exportable-sap', [HorometrosRegistroController::class, 'exportSap']);
             Route::get('/registros/{registro}', [HorometrosRegistroController::class, 'show']);
             Route::delete('/registros/{registro}', [HorometrosRegistroController::class, 'destroy']);
             Route::get('/pendientes', [HorometrosRegistroController::class, 'pendientes']);

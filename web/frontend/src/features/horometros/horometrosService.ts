@@ -47,6 +47,15 @@ export async function exportHorometroRegistros(filters?: HorometroFilters) {
   return data
 }
 
+export async function exportHorometroSap(filters?: HorometroFilters) {
+  const { data } = await api.get<Blob>('/horometros/registros/exportable-sap', {
+    params: cleanParams({ ...filters, page: undefined, per_page: undefined }),
+    responseType: 'blob',
+  })
+
+  return data
+}
+
 export async function deleteHorometroRegistro(id: number) {
   await api.delete(`/horometros/registros/${id}`)
 }

@@ -41,4 +41,8 @@ return [
         'verify_ssl' => env('SAP_CATALOG_VERIFY_SSL', true),
     ],
 
+    'horometros_sap_report' => [
+        'token' => env('HOROMETROS_SAP_REPORT_TOKEN'),
+    ],
+
 ];

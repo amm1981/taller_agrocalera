@@ -16,6 +16,8 @@ export type HorometroRegistro = {
   id: number
   vehiculo_id: number
   fecha: string
+  semana_iso: number | null
+  semana_anio: number | null
   operario_id: number | null
   usuario_responsable_id: number | null
   fundo_id: number | null
@@ -87,6 +89,8 @@ export type HorometroFilters = {
   sector_id?: string
   lote_id?: string
   tipo_vehiculo_id?: string
+  semana_iso?: string
+  semana_anio?: string
   correccion_manual?: string
   con_foto?: string
   estado?: string

@@ -380,7 +380,7 @@ class AgroControlApi(private val baseUrl: String) {
                 fullName = "${item.optString("nombres")} ${item.optString("apellidos")}".trim(),
                 type = item.optString("tipo"),
             )
-        }.filter { it.type == "OPERARIO" || it.type == "CONDUCTOR" || it.type == "MAQUINISTA" }
+        }.filter { it.type == "OPERARIO" || it.type == "CONDUCTOR" || it.type == "TRACTORISTA" || it.type == "MAQUINISTA" }
     }
 
     suspend fun pendingRecords(token: String): List<HourmeterRecord> = withContext(Dispatchers.IO) {
@@ -1919,7 +1919,9 @@ fun StartScreen(
         operators.filter {
             when (registrationType) {
                 RegistrationType.HEAVY -> it.type.equals("MAQUINISTA", ignoreCase = true)
-                RegistrationType.TRACTORS -> it.type.equals("OPERARIO", ignoreCase = true) || it.type.equals("CONDUCTOR", ignoreCase = true)
+                RegistrationType.TRACTORS -> it.type.equals("TRACTORISTA", ignoreCase = true) ||
+                    it.type.equals("OPERARIO", ignoreCase = true) ||
+                    it.type.equals("CONDUCTOR", ignoreCase = true)
             }
         }
     }

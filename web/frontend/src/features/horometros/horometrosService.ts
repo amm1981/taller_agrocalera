@@ -140,6 +140,22 @@ export async function createHorometroConfiguracionTipo(payload: { nombre: string
   return data.data
 }
 
+export async function updateHorometroTipoRegistro(tipoVehiculoId: number, payload: { nombre: string; estado: string; icono?: File | null }) {
+  const formData = new FormData()
+  formData.append('nombre', payload.nombre)
+  formData.append('estado', payload.estado)
+
+  if (payload.icono) {
+    formData.append('icono', payload.icono)
+  }
+
+  const { data } = await api.post<DataResponse<HorometroConfiguracionPorTipo>>(`/horometros/configuraciones/${tipoVehiculoId}/tipo`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  })
+
+  return data.data
+}
+
 export async function updateHorometroConfiguracion(payload: Omit<HorometroConfiguracion, 'id'>) {
   const { data } = await api.put<DataResponse<HorometroConfiguracion>>('/horometros/configuracion', payload)
 

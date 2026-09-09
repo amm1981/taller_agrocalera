@@ -16,7 +16,6 @@ class ConfiguracionController extends Controller
     public function index(): array
     {
         $tipos = TipoVehiculo::query()
-            ->where('estado', 'ACTIVO')
             ->with('configuracionHorometro')
             ->orderBy('nombre')
             ->get()
@@ -46,13 +45,7 @@ class ConfiguracionController extends Controller
         ]);
 
         $file = $request->file('icono');
-        $size = $file ? @getimagesize($file->getRealPath()) : false;
-
-        if (! $size || $size[0] > 50 || $size[1] > 50) {
-            throw ValidationException::withMessages([
-                'icono' => ['El icono debe ser PNG y no debe superar 50x50 px.'],
-            ]);
-        }
+        $this->validateIcon($file);
 
         $tipoVehiculo = TipoVehiculo::query()->create([
             'nombre' => $data['nombre'],
@@ -61,18 +54,47 @@ class ConfiguracionController extends Controller
             'estado' => 'ACTIVO',
         ]);
 
-        $path = sprintf(
-            'horometros/tipos-registro/%s-%s/icono.png',
-            $tipoVehiculo->id,
-            Str::slug($tipoVehiculo->nombre),
-        );
-
-        Storage::disk(config('filesystems.evidence_disk', 'public'))->put($path, file_get_contents($file->getRealPath()));
-        $tipoVehiculo->update(['icono_path' => $path]);
+        $tipoVehiculo->update(['icono_path' => $this->storeIcon($tipoVehiculo, $file)]);
 
         $configuracion = HorometroConfiguracion::query()->create([
             'tipo_vehiculo_id' => $tipoVehiculo->id,
         ]);
+
+        return [
+            'data' => [
+                'tipo_vehiculo' => $tipoVehiculo->refresh(),
+                'configuracion' => $configuracion->refresh(),
+            ],
+        ];
+    }
+
+    public function updateTipo(Request $request, TipoVehiculo $tipoVehiculo): array
+    {
+        $data = $request->validate([
+            'nombre' => ['required', 'string', 'max:120', Rule::unique('tipos_vehiculo', 'nombre')->ignore($tipoVehiculo->id)],
+            'estado' => ['required', Rule::in(['ACTIVO', 'INACTIVO'])],
+            'icono' => ['nullable', 'file', 'mimes:png', 'max:128'],
+        ]);
+
+        $payload = [
+            'nombre' => $data['nombre'],
+            'estado' => $data['estado'],
+        ];
+
+        if ($request->hasFile('icono')) {
+            $file = $request->file('icono');
+            $this->validateIcon($file);
+            $oldPath = $tipoVehiculo->icono_path;
+            $payload['icono_path'] = $this->storeIcon($tipoVehiculo, $file);
+
+            if ($oldPath && $oldPath !== $payload['icono_path']) {
+                Storage::disk(config('filesystems.evidence_disk', 'public'))->delete($oldPath);
+            }
+        }
+
+        $tipoVehiculo->update($payload);
+        $configuracion = $tipoVehiculo->configuracionHorometro
+            ?? HorometroConfiguracion::query()->create(['tipo_vehiculo_id' => $tipoVehiculo->id]);
 
         return [
             'data' => [
@@ -144,5 +166,30 @@ class ConfiguracionController extends Controller
         return HorometroConfiguracion::query()->whereNull('tipo_vehiculo_id')->first()
             ?? HorometroConfiguracion::query()->first()
             ?? HorometroConfiguracion::query()->create([]);
+    }
+
+    private function validateIcon($file): void
+    {
+        $size = $file ? @getimagesize($file->getRealPath()) : false;
+
+        if (! $size || $size[0] > 50 || $size[1] > 50) {
+            throw ValidationException::withMessages([
+                'icono' => ['El icono debe ser PNG y no debe superar 50x50 px.'],
+            ]);
+        }
+    }
+
+    private function storeIcon(TipoVehiculo $tipoVehiculo, $file): string
+    {
+        $path = sprintf(
+            'horometros/tipos-registro/%s-%s/icono-%s.png',
+            $tipoVehiculo->id,
+            Str::slug($tipoVehiculo->nombre),
+            now()->format('YmdHis'),
+        );
+
+        Storage::disk(config('filesystems.evidence_disk', 'public'))->put($path, file_get_contents($file->getRealPath()));
+
+        return $path;
     }
 }

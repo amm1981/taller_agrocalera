@@ -183,6 +183,7 @@ Route::middleware('auth:sanctum')->group(function () {
         });
         Route::middleware('permission:horometros.validar')->post('/{registro}/anular', [HorometrosRegistroController::class, 'anular']);
         Route::middleware('permission:horometros.validar')->post('/configuraciones', [HorometrosConfiguracionController::class, 'store']);
+        Route::middleware('permission:horometros.validar')->post('/configuraciones/{tipoVehiculo}/tipo', [HorometrosConfiguracionController::class, 'updateTipo']);
         Route::middleware('permission:horometros.validar')->put('/configuraciones/{tipoVehiculo}', [HorometrosConfiguracionController::class, 'updateByTipo']);
         Route::middleware('permission:horometros.validar')->put('/configuracion', [HorometrosConfiguracionController::class, 'update']);
         Route::middleware('permission:horometros.reportes.ver')->get('/reportes', HorometrosReporteController::class);

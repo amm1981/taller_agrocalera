@@ -6,6 +6,7 @@ import {
   createHorometroConfiguracionTipo,
   getHorometroConfiguraciones,
   updateHorometroConfiguracionTipo,
+  updateHorometroTipoRegistro,
 } from '../features/horometros/horometrosService'
 import type { HorometroConfiguracion, HorometroConfiguracionPorTipo } from '../features/horometros/types'
 import { getTiposPersonalMaster } from '../features/maestros/maestrosService'
@@ -16,6 +17,12 @@ import { AppLayout } from '../layouts/AppLayout'
 type FormState = Omit<HorometroConfiguracion, 'id' | 'tipo_vehiculo_id'>
 type NewTipoForm = {
   nombre: string
+  icono: File | null
+  iconPreview: string | null
+}
+type TipoForm = {
+  nombre: string
+  estado: string
   icono: File | null
   iconPreview: string | null
 }
@@ -50,6 +57,8 @@ export function HorometrosConfiguracionPage() {
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [newTipo, setNewTipo] = useState<NewTipoForm>({ nombre: '', icono: null, iconPreview: null })
   const [createError, setCreateError] = useState<string | null>(null)
+  const [tipoForms, setTipoForms] = useState<Record<number, TipoForm>>({})
+  const [tipoErrors, setTipoErrors] = useState<Record<number, string | null>>({})
   const configuraciones = useQuery({
     queryKey: ['horometros-configuraciones'],
     queryFn: getHorometroConfiguraciones,
@@ -79,6 +88,13 @@ export function HorometrosConfiguracionPage() {
       setCreateError(error.message || 'No se pudo crear el tipo de registro.')
     },
   })
+  const updateTipo = useMutation({
+    mutationFn: ({ tipoVehiculoId, payload }: { tipoVehiculoId: number; payload: { nombre: string; estado: string; icono?: File | null } }) => updateHorometroTipoRegistro(tipoVehiculoId, payload),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['horometros-configuraciones'] })
+      await queryClient.invalidateQueries({ queryKey: ['tipos-vehiculo'] })
+    },
+  })
 
   useEffect(() => {
     if (!configuraciones.data) {
@@ -88,6 +104,15 @@ export function HorometrosConfiguracionPage() {
     setForms(Object.fromEntries(configuraciones.data.map((item) => [
       item.tipo_vehiculo.id,
       normalizeConfig(item.configuracion),
+    ])))
+    setTipoForms(Object.fromEntries(configuraciones.data.map((item) => [
+      item.tipo_vehiculo.id,
+      {
+        nombre: item.tipo_vehiculo.nombre,
+        estado: item.tipo_vehiculo.estado,
+        icono: null,
+        iconPreview: null,
+      },
     ])))
   }, [configuraciones.data])
 
@@ -130,16 +155,13 @@ export function HorometrosConfiguracionPage() {
     }))
   }
 
-  const handleIconFile = async (file?: File) => {
-    setCreateError(null)
-
+  const validatePngIcon = (file: File | undefined, onValid: (file: File, preview: string) => void, onError: (message: string) => void) => {
     if (!file) {
-      setNewTipo((current) => ({ ...current, icono: null, iconPreview: null }))
       return
     }
 
     if (file.type !== 'image/png') {
-      setCreateError('El icono debe ser un archivo PNG.')
+      onError('El icono debe ser un archivo PNG.')
       return
     }
 
@@ -148,17 +170,87 @@ export function HorometrosConfiguracionPage() {
     image.onload = () => {
       if (image.width > 50 || image.height > 50) {
         URL.revokeObjectURL(imageUrl)
-        setCreateError('El icono no debe superar 50x50 px.')
+        onError('El icono no debe superar 50x50 px.')
         return
       }
 
-      setNewTipo((current) => ({ ...current, icono: file, iconPreview: imageUrl }))
+      onValid(file, imageUrl)
     }
     image.onerror = () => {
       URL.revokeObjectURL(imageUrl)
-      setCreateError('No se pudo leer el icono seleccionado.')
+      onError('No se pudo leer el icono seleccionado.')
     }
     image.src = imageUrl
+  }
+
+  const handleIconFile = (file?: File) => {
+    setCreateError(null)
+
+    if (!file) {
+      setNewTipo((current) => ({ ...current, icono: null, iconPreview: null }))
+      return
+    }
+
+    validatePngIcon(
+      file,
+      (validFile, preview) => setNewTipo((current) => ({ ...current, icono: validFile, iconPreview: preview })),
+      setCreateError,
+    )
+  }
+
+  const patchTipo = <K extends keyof TipoForm>(tipoVehiculoId: number, key: K, value: TipoForm[K]) => {
+    setTipoForms((current) => ({
+      ...current,
+      [tipoVehiculoId]: {
+        ...current[tipoVehiculoId],
+        [key]: value,
+      },
+    }))
+  }
+
+  const handleTipoIconFile = (tipoVehiculoId: number, file?: File) => {
+    setTipoErrors((current) => ({ ...current, [tipoVehiculoId]: null }))
+
+    if (!file) {
+      patchTipo(tipoVehiculoId, 'icono', null)
+      patchTipo(tipoVehiculoId, 'iconPreview', null)
+      return
+    }
+
+    validatePngIcon(
+      file,
+      (validFile, preview) => {
+        patchTipo(tipoVehiculoId, 'icono', validFile)
+        patchTipo(tipoVehiculoId, 'iconPreview', preview)
+      },
+      (message) => setTipoErrors((current) => ({ ...current, [tipoVehiculoId]: message })),
+    )
+  }
+
+  const saveTipo = (tipoVehiculoId: number) => {
+    const form = tipoForms[tipoVehiculoId]
+
+    if (!form?.nombre.trim()) {
+      setTipoErrors((current) => ({ ...current, [tipoVehiculoId]: 'Ingresa el nombre del tipo de registro.' }))
+      return
+    }
+
+    setTipoErrors((current) => ({ ...current, [tipoVehiculoId]: null }))
+    updateTipo.mutate(
+      {
+        tipoVehiculoId,
+        payload: {
+          nombre: form.nombre.trim(),
+          estado: form.estado,
+          icono: form.icono,
+        },
+      },
+      {
+        onError: (error: Error) => {
+          setTipoErrors((current) => ({ ...current, [tipoVehiculoId]: error.message || 'No se pudo guardar el tipo de registro.' }))
+        },
+      },
+    )
   }
 
   const submitNewTipo = () => {
@@ -194,8 +286,14 @@ export function HorometrosConfiguracionPage() {
             key={item.tipo_vehiculo.id}
             item={item}
             form={forms[item.tipo_vehiculo.id]}
+            tipoForm={tipoForms[item.tipo_vehiculo.id]}
+            tipoError={tipoErrors[item.tipo_vehiculo.id] ?? null}
             tiposPersonal={tiposPersonal.data ?? []}
             saving={update.isPending}
+            savingTipo={updateTipo.isPending}
+            onPatchTipo={patchTipo}
+            onPatchTipoIcon={handleTipoIconFile}
+            onSaveTipo={saveTipo}
             onPatch={patch}
             onPatchRequired={patchRequiredField}
             onPatchPersonalType={patchPersonalType}
@@ -236,8 +334,14 @@ export function HorometrosConfiguracionPage() {
 function TipoRegistroConfigCard({
   item,
   form,
+  tipoForm,
+  tipoError,
   tiposPersonal,
   saving,
+  savingTipo,
+  onPatchTipo,
+  onPatchTipoIcon,
+  onSaveTipo,
   onPatch,
   onPatchRequired,
   onPatchPersonalType,
@@ -245,14 +349,20 @@ function TipoRegistroConfigCard({
 }: {
   item: HorometroConfiguracionPorTipo
   form?: FormState
+  tipoForm?: TipoForm
+  tipoError: string | null
   tiposPersonal: TipoPersonal[]
   saving: boolean
+  savingTipo: boolean
+  onPatchTipo: <K extends keyof TipoForm>(tipoVehiculoId: number, key: K, value: TipoForm[K]) => void
+  onPatchTipoIcon: (tipoVehiculoId: number, file?: File) => void
+  onSaveTipo: (tipoVehiculoId: number) => void
   onPatch: <K extends keyof FormState>(tipoVehiculoId: number, key: K, value: FormState[K]) => void
   onPatchRequired: (tipoVehiculoId: number, key: keyof NonNullable<FormState['campos_requeridos']>, value: boolean) => void
   onPatchPersonalType: (tipoVehiculoId: number, codigo: string, checked: boolean) => void
   onSave: () => void
 }) {
-  if (!form) {
+  if (!form || !tipoForm) {
     return null
   }
 
@@ -265,21 +375,61 @@ function TipoRegistroConfigCard({
 
   return (
     <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
-      <div className="flex items-center gap-3 border-b border-slate-100 px-5 py-4">
-        <div className="grid h-10 w-10 place-items-center rounded-lg bg-emerald-50 text-emerald-700">
-          {item.tipo_vehiculo.icono_url ? (
+      <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-5 py-4">
+        <div className="flex items-center gap-3">
+          <div className="grid h-10 w-10 place-items-center rounded-lg bg-emerald-50 text-emerald-700">
+          {tipoForm.iconPreview ? (
+            <img src={tipoForm.iconPreview} alt="" className="h-7 w-7 object-contain" />
+          ) : item.tipo_vehiculo.icono_url ? (
             <img src={item.tipo_vehiculo.icono_url} alt="" className="h-7 w-7 object-contain" />
           ) : (
             <Settings2 className="h-5 w-5" aria-hidden="true" />
           )}
+          </div>
+          <div>
+            <h2 className="text-base font-black text-slate-950">{item.tipo_vehiculo.nombre}</h2>
+            <p className="text-sm font-medium text-slate-500">Reglas específicas para este tipo de registro.</p>
+          </div>
         </div>
-        <div>
-          <h2 className="text-base font-black text-slate-950">{item.tipo_vehiculo.nombre}</h2>
-          <p className="text-sm font-medium text-slate-500">Reglas específicas para este tipo de registro.</p>
-        </div>
+        <span className={`rounded-full px-3 py-1 text-xs font-black ${item.tipo_vehiculo.estado === 'ACTIVO' ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
+          {item.tipo_vehiculo.estado}
+        </span>
       </div>
 
       <div className="grid gap-5 p-5 xl:grid-cols-2">
+        <div className="grid gap-4 rounded-xl border border-slate-200 p-4 xl:col-span-2">
+          <h3 className="text-sm font-black uppercase text-slate-500">Tipo de registro</h3>
+          <div className="grid gap-3 md:grid-cols-[1fr_180px_260px]">
+            <FilterField label="Nombre">
+              <input className={inputClass} value={tipoForm.nombre} onChange={(event) => onPatchTipo(tipoId, 'nombre', event.target.value)} />
+            </FilterField>
+            <FilterField label="Estado">
+              <select className={inputClass} value={tipoForm.estado} onChange={(event) => onPatchTipo(tipoId, 'estado', event.target.value)}>
+                <option value="ACTIVO">ACTIVO</option>
+                <option value="INACTIVO">INACTIVO</option>
+              </select>
+            </FilterField>
+            <div className="grid gap-1">
+              <span className="text-xs font-black uppercase tracking-wide text-slate-500">Icono PNG</span>
+              <label className="flex h-10 cursor-pointer items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-3 text-sm font-bold text-slate-700 transition hover:bg-slate-50">
+                <Upload className="h-4 w-4" aria-hidden="true" />
+                Cambiar icono
+                <input className="hidden" type="file" accept="image/png" onChange={(event) => onPatchTipoIcon(tipoId, event.target.files?.[0])} />
+              </label>
+            </div>
+          </div>
+          <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+            <p className="text-xs font-semibold text-slate-500">El icono debe ser PNG y no superar 50x50 px. Si el tipo está inactivo, no se sincroniza al aplicativo.</p>
+            <Button variant="secondary" disabled={savingTipo} onClick={() => onSaveTipo(tipoId)}>
+              <Save className="h-4 w-4" aria-hidden="true" />
+              Guardar tipo
+            </Button>
+          </div>
+          {tipoError ? (
+            <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700">{tipoError}</div>
+          ) : null}
+        </div>
+
         <div className="grid gap-4 rounded-xl border border-slate-200 p-4">
           <h3 className="text-sm font-black uppercase text-slate-500">Horarios</h3>
           <div className="grid gap-3 md:grid-cols-3">

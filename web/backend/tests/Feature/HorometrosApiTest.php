@@ -743,6 +743,27 @@ class HorometrosApiTest extends TestCase
         $tipo = TipoVehiculo::where('nombre', 'Motos')->firstOrFail();
         $this->assertNotNull($tipo->icono_path);
         Storage::disk('public')->assertExists($tipo->icono_path);
+
+        $secondPath = tempnam(sys_get_temp_dir(), 'tipo_icon_');
+        file_put_contents($secondPath, base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='));
+
+        $this
+            ->withToken($this->adminToken())
+            ->post("/api/horometros/configuraciones/{$tipo->id}/tipo", [
+                'nombre' => 'Motos Campo',
+                'estado' => 'INACTIVO',
+                'icono' => new UploadedFile($secondPath, 'motos-campo.png', 'image/png', null, true),
+            ])
+            ->assertOk()
+            ->assertJsonPath('data.tipo_vehiculo.nombre', 'Motos Campo')
+            ->assertJsonPath('data.tipo_vehiculo.estado', 'INACTIVO');
+
+        @unlink($secondPath);
+
+        $tipo->refresh();
+        $this->assertSame('INACTIVO', $tipo->estado);
+        $this->assertNotNull($tipo->icono_path);
+        Storage::disk('public')->assertExists($tipo->icono_path);
     }
 
     public function test_heavy_machinery_app_sync_returns_configured_maquinistas(): void

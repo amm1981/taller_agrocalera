@@ -14,14 +14,11 @@ import {
 import { useState } from 'react'
 import { Button } from '../components/ui/button'
 import { getHorometrosDashboard } from '../features/horometros/horometrosService'
+import { limaTodayYmd } from '../features/horometros/dateUtils'
 import type { HorometroFilters } from '../features/horometros/types'
 import { FilterField, inputClass } from '../features/taller/components/FilterField'
 import { vehicleName } from '../features/taller/components/tallerFormatters'
 import { AppLayout } from '../layouts/AppLayout'
-
-function today() {
-  return new Date().toISOString().slice(0, 10)
-}
 
 function metricPercent(done?: number, expected?: number) {
   if (!expected) {
@@ -33,8 +30,8 @@ function metricPercent(done?: number, expected?: number) {
 
 export function DashboardPage() {
   const [filters, setFilters] = useState<HorometroFilters>({
-    fecha_desde: today(),
-    fecha_hasta: today(),
+    fecha_desde: limaTodayYmd(),
+    fecha_hasta: limaTodayYmd(),
   })
 
   const dashboard = useQuery({

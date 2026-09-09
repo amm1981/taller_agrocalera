@@ -840,6 +840,13 @@ class HorometrosApiTest extends TestCase
             'tipo' => 'MAQUINISTA',
             'estado' => 'ACTIVO',
         ]);
+        $otroMaquinista = Personal::query()->create([
+            'dni' => '44445555',
+            'nombres' => 'Eddy',
+            'apellidos' => 'Operador',
+            'tipo' => 'MAQUINISTA',
+            'estado' => 'ACTIVO',
+        ]);
         Personal::query()->create([
             'dni' => '33334444',
             'nombres' => 'Luis',
@@ -869,8 +876,27 @@ class HorometrosApiTest extends TestCase
         );
 
         $this->assertTrue($operators->contains('id', $maquinista->id));
+        $this->assertTrue($operators->contains('id', $otroMaquinista->id));
         $this->assertFalse($operators->contains('id', $responsable->id));
         $this->assertTrue($operators->every(fn (array $item) => $item['tipo'] === 'MAQUINISTA'));
+
+        $appUser->update(['personal_id' => $maquinista->id]);
+
+        $login = $this->postJson('/api/app/horometros/login', [
+            'usuario' => 'responsable.mp',
+            'password' => '12345678',
+        ])->assertOk();
+
+        $operators = collect(
+            $this->withToken($login->json('token'))
+                ->getJson('/api/app/horometros/sync')
+                ->assertOk()
+                ->json('data.operadores')
+        );
+
+        $this->assertTrue($operators->contains('id', $maquinista->id));
+        $this->assertTrue($operators->contains('id', $otroMaquinista->id));
+        $this->assertFalse($operators->contains('id', $responsable->id));
     }
 
     private function adminToken(): string

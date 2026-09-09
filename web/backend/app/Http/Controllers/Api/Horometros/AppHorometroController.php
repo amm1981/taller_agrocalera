@@ -214,15 +214,10 @@ class AppHorometroController extends Controller
             ->unique()
             ->values()
             ->all();
-        $personalUsuario = $usuario->personal;
-        $soloPropio = $personalUsuario !== null
-            && $personalTipos !== []
-            && in_array(strtoupper($personalUsuario->tipo), $personalTipos, true);
 
         return Personal::query()
-            ->when($soloPropio, fn (Builder $query) => $query->whereKey($personalUsuario->id))
-            ->when(! $soloPropio && $personalTipos !== [], fn (Builder $query) => $query->whereIn(DB::raw('UPPER(tipo)'), $personalTipos))
-            ->when(! $soloPropio && $personalTipos === [] && $usuario->personal_id, fn (Builder $query, int $personalId) => $query->whereKey($personalId))
+            ->when($personalTipos !== [], fn (Builder $query) => $query->whereIn(DB::raw('UPPER(tipo)'), $personalTipos))
+            ->when($personalTipos === [] && $usuario->personal_id, fn (Builder $query, int $personalId) => $query->whereKey($personalId))
             ->where('estado', 'ACTIVO')
             ->orderBy('nombres')
             ->get();

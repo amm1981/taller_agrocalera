@@ -5,25 +5,27 @@ import { Button } from '../components/ui/button'
 import { useAuth } from '../features/auth/AuthContext'
 import { getOperarios, getVehiculos } from '../features/maestros/masterDataService'
 import {
-  getFundosMaster,
-  getLotesMaster,
   getSedesMaster,
   getTiposVehiculoMaster,
 } from '../features/maestros/maestrosService'
 import { deleteHorometroRegistro, exportHorometroRegistros, exportHorometroSap, getHorometroRegistros } from '../features/horometros/horometrosService'
+import { currentLimaIsoWeekRange, limaTodayYmd } from '../features/horometros/dateUtils'
 import type { HorometroFilters, HorometroRegistro } from '../features/horometros/types'
 import { StatusBadge } from '../features/taller/components/StatusBadge'
 import { FilterField, inputClass } from '../features/taller/components/FilterField'
 import { formatDateTime, personName, vehicleName } from '../features/taller/components/tallerFormatters'
-import { getUsuarios } from '../features/usuarios/usuariosService'
 import { AppLayout } from '../layouts/AppLayout'
 
 const estados = ['PENDIENTE_INICIO', 'EN_JORNADA', 'COMPLETO', 'SIN_INICIO', 'SIN_CIERRE', 'INCONSISTENCIA', 'REGULARIZADO', 'OBSERVADO', 'ANULADO']
 
+function defaultFilters(): HorometroFilters {
+  return { ...currentLimaIsoWeekRange(), per_page: 30 }
+}
+
 export function HorometrosRegistrosPage() {
   const queryClient = useQueryClient()
   const { session } = useAuth()
-  const [filters, setFilters] = useState<HorometroFilters>({ per_page: 30 })
+  const [filters, setFilters] = useState<HorometroFilters>(() => defaultFilters())
   const [selected, setSelected] = useState<HorometroRegistro | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<HorometroRegistro | null>(null)
   const registros = useQuery({
@@ -32,10 +34,7 @@ export function HorometrosRegistrosPage() {
   })
   const vehiculos = useQuery({ queryKey: ['vehiculos'], queryFn: getVehiculos })
   const operarios = useQuery({ queryKey: ['operarios'], queryFn: getOperarios })
-  const usuarios = useQuery({ queryKey: ['usuarios-lookup'], queryFn: () => getUsuarios({ per_page: 100 }) })
   const sedes = useQuery({ queryKey: ['maestros-sedes-lookup'], queryFn: getSedesMaster })
-  const fundos = useQuery({ queryKey: ['maestros-fundos-lookup'], queryFn: getFundosMaster })
-  const lotes = useQuery({ queryKey: ['maestros-lotes-lookup'], queryFn: getLotesMaster })
   const tiposVehiculo = useQuery({ queryKey: ['tipos-vehiculo'], queryFn: getTiposVehiculoMaster })
   const exportMutation = useMutation({
     mutationFn: () => exportHorometroRegistros(filters),
@@ -43,7 +42,7 @@ export function HorometrosRegistrosPage() {
       const url = window.URL.createObjectURL(blob)
       const link = document.createElement('a')
       link.href = url
-      link.download = `horometros-registros-${new Date().toISOString().slice(0, 10)}.xlsx`
+      link.download = `horometros-registros-${limaTodayYmd()}.xlsx`
       document.body.appendChild(link)
       link.click()
       link.remove()
@@ -56,7 +55,7 @@ export function HorometrosRegistrosPage() {
       const url = window.URL.createObjectURL(blob)
       const link = document.createElement('a')
       link.href = url
-      link.download = `horometros-exportable-sap-${new Date().toISOString().slice(0, 10)}.xlsx`
+      link.download = `horometros-exportable-sap-${limaTodayYmd()}.xlsx`
       document.body.appendChild(link)
       link.click()
       link.remove()
@@ -85,28 +84,30 @@ export function HorometrosRegistrosPage() {
     <AppLayout title="Horómetros · Registros" description="Auditoría por fechas, ubicación, vehículo, personal y evidencia">
       <section className="mb-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
-          <FilterField label="Fecha desde">
-            <input className={inputClass} type="date" value={filters.fecha_desde ?? ''} onChange={(event) => updateFilter('fecha_desde', event.target.value)} />
-          </FilterField>
-          <FilterField label="Fecha hasta">
-            <input className={inputClass} type="date" value={filters.fecha_hasta ?? ''} onChange={(event) => updateFilter('fecha_hasta', event.target.value)} />
-          </FilterField>
+          <div className="xl:col-span-2">
+            <FilterField label="Rango de fechas">
+              <div className="grid grid-cols-2 gap-2">
+                <input
+                  className={inputClass}
+                  type="date"
+                  value={filters.fecha_desde ?? ''}
+                  onChange={(event) => updateFilter('fecha_desde', event.target.value)}
+                  aria-label="Fecha desde"
+                />
+                <input
+                  className={inputClass}
+                  type="date"
+                  value={filters.fecha_hasta ?? ''}
+                  onChange={(event) => updateFilter('fecha_hasta', event.target.value)}
+                  aria-label="Fecha hasta"
+                />
+              </div>
+            </FilterField>
+          </div>
           <FilterField label="Sede">
             <select className={inputClass} value={filters.sede_id ?? ''} onChange={(event) => updateFilter('sede_id', event.target.value)}>
               <option value="">Todas</option>
               {(sedes.data ?? []).map((item) => <option key={item.id} value={item.id}>{item.nombre}</option>)}
-            </select>
-          </FilterField>
-          <FilterField label="Fundo">
-            <select className={inputClass} value={filters.fundo_id ?? ''} onChange={(event) => updateFilter('fundo_id', event.target.value)}>
-              <option value="">Todos</option>
-              {(fundos.data ?? []).map((item) => <option key={item.id} value={item.id}>{item.nombre}</option>)}
-            </select>
-          </FilterField>
-          <FilterField label="Lote">
-            <select className={inputClass} value={filters.lote_id ?? ''} onChange={(event) => updateFilter('lote_id', event.target.value)}>
-              <option value="">Todos</option>
-              {(lotes.data ?? []).map((item) => <option key={item.id} value={item.id}>{item.nombre}</option>)}
             </select>
           </FilterField>
           <FilterField label="Tipo vehículo">
@@ -115,44 +116,22 @@ export function HorometrosRegistrosPage() {
               {(tiposVehiculo.data ?? []).map((item) => <option key={item.id} value={item.id}>{item.nombre}</option>)}
             </select>
           </FilterField>
-          <FilterField label="Año semana ISO">
-            <input className={inputClass} type="number" min="2000" max="2100" placeholder="2026" value={filters.semana_anio ?? ''} onChange={(event) => updateFilter('semana_anio', event.target.value)} />
-          </FilterField>
-          <FilterField label="Semana ISO">
-            <select className={inputClass} value={filters.semana_iso ?? ''} onChange={(event) => updateFilter('semana_iso', event.target.value)}>
-              <option value="">Todas</option>
-              {Array.from({ length: 53 }, (_, index) => index + 1).map((week) => <option key={week} value={week}>{week}</option>)}
-            </select>
-          </FilterField>
           <FilterField label="Vehículo">
             <select className={inputClass} value={filters.vehiculo_id ?? ''} onChange={(event) => updateFilter('vehiculo_id', event.target.value)}>
               <option value="">Todos</option>
               {(vehiculos.data ?? []).map((item) => <option key={item.id} value={item.id}>{vehicleName(item)}</option>)}
             </select>
           </FilterField>
-          <FilterField label="Conductor / operario">
+          <FilterField label="Personal">
             <select className={inputClass} value={filters.operario_id ?? ''} onChange={(event) => updateFilter('operario_id', event.target.value)}>
               <option value="">Todos</option>
               {(operarios.data ?? []).map((item) => <option key={item.id} value={item.id}>{item.dni} - {item.nombres} {item.apellidos}</option>)}
-            </select>
-          </FilterField>
-          <FilterField label="Responsable">
-            <select className={inputClass} value={filters.usuario_responsable_id ?? ''} onChange={(event) => updateFilter('usuario_responsable_id', event.target.value)}>
-              <option value="">Todos</option>
-              {(usuarios.data?.data ?? []).map((item) => <option key={item.id} value={item.id}>{item.name} {item.last_name ?? ''}</option>)}
             </select>
           </FilterField>
           <FilterField label="Estado">
             <select className={inputClass} value={filters.estado ?? ''} onChange={(event) => updateFilter('estado', event.target.value)}>
               <option value="">Todos</option>
               {estados.map((estado) => <option key={estado} value={estado}>{estado.replaceAll('_', ' ')}</option>)}
-            </select>
-          </FilterField>
-          <FilterField label="Corrección manual">
-            <select className={inputClass} value={filters.correccion_manual ?? ''} onChange={(event) => updateFilter('correccion_manual', event.target.value)}>
-              <option value="">Todas</option>
-              <option value="true">Con corrección</option>
-              <option value="false">Sin corrección</option>
             </select>
           </FilterField>
           <FilterField label="Foto">
@@ -163,7 +142,7 @@ export function HorometrosRegistrosPage() {
             </select>
           </FilterField>
           <div className="flex flex-wrap items-end justify-end gap-2 md:col-span-2 xl:col-span-6">
-            <Button className="min-w-24 whitespace-nowrap" variant="secondary" onClick={() => setFilters({ per_page: 30 })}>Limpiar</Button>
+            <Button className="min-w-24 whitespace-nowrap" variant="secondary" onClick={() => setFilters(defaultFilters())}>Limpiar</Button>
             <Button
               className="h-10 w-10 rounded-lg border border-slate-200 bg-white p-0 text-slate-600 shadow-sm hover:bg-slate-50"
               variant="ghost"
@@ -362,17 +341,13 @@ function RegistroDetailModal({ registro, onClose }: { registro: HorometroRegistr
           <Evidence title="Foto final" url={registro.foto_final_url} path={registro.foto_final} />
         </div>
         <div className="grid gap-3 border-t border-slate-100 p-5 text-sm md:grid-cols-3">
-          <Detail label="OCR inicial" value={registro.horometro_inicial_ocr ?? '-'} />
           <Detail label="Inicial confirmado" value={registro.horometro_inicial_confirmado ?? '-'} />
           <Detail label="Corrección inicial" value={registro.correccion_manual_inicio ? 'Sí' : 'No'} />
-          <Detail label="OCR final" value={registro.horometro_final_ocr ?? '-'} />
           <Detail label="Final confirmado" value={registro.horometro_final_confirmado ?? '-'} />
           <Detail label="Corrección final" value={registro.correccion_manual_final ? 'Sí' : 'No'} />
           <Detail label="Inicio" value={formatDateTime(registro.fecha_hora_inicio)} />
           <Detail label="Cierre" value={formatDateTime(registro.fecha_hora_final)} />
           <Detail label="Estado" value={registro.estado.replaceAll('_', ' ')} />
-          <Detail label="Fundo" value={registro.fundo?.nombre ?? '-'} />
-          <Detail label="Lote" value={registro.lote?.nombre ?? '-'} />
           <Detail label="Punto de medida" value={registro.punto_medida ?? '-'} />
           <Detail label="Responsable" value={registro.usuario_responsable?.name ?? '-'} />
         </div>

@@ -2184,11 +2184,22 @@ fun StartScreen(
     val filtered = remember(vehicles, sedeId) { vehicles.filter { sedeId != null && it.sedeId == sedeId } }
     val selected = filtered.firstOrNull { it.id == vehicleId }
     val availableOperators = remember(operators, registrationType.config.operatorTypes) {
-        val allowed = registrationType.config.operatorTypes.map { it.uppercase() }.toSet()
+        val allowed = registrationType.config.operatorTypes
+            .map { it.trim().uppercase() }
+            .filter { it.isNotBlank() }
+            .toSet()
         if (allowed.isEmpty()) {
             operators
         } else {
-            operators.filter { it.type.uppercase() in allowed }
+            operators.filter { it.type.trim().uppercase() in allowed }
+        }
+    }
+    LaunchedEffect(availableOperators) {
+        if (operatorId != null && availableOperators.none { it.id == operatorId }) {
+            operatorId = null
+        }
+        if (operatorId == null && availableOperators.size == 1) {
+            operatorId = availableOperators.first().id
         }
     }
     val selectedOperator = availableOperators.firstOrNull { it.id == operatorId }

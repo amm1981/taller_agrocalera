@@ -10,6 +10,7 @@ import {
   getHorometroValidaciones,
   reabrirHorometro,
 } from '../features/horometros/horometrosService'
+import { limaTodayYmd } from '../features/horometros/dateUtils'
 import type { HorometroFilters, HorometroReapertura, HorometroRegistro } from '../features/horometros/types'
 import { StatusBadge } from '../features/taller/components/StatusBadge'
 import { FilterField, inputClass } from '../features/taller/components/FilterField'
@@ -24,14 +25,10 @@ type ReopenTarget = {
   tipo: 'INICIO' | 'CIERRE'
 }
 
-function today() {
-  return new Date().toISOString().slice(0, 10)
-}
-
 export function HorometrosValidacionesPage() {
   const queryClient = useQueryClient()
   const [tab, setTab] = useState<TabKey>('inconsistencias')
-  const [filters, setFilters] = useState<HorometroFilters>({ fecha: today(), per_page: 80 })
+  const [filters, setFilters] = useState<HorometroFilters>({ fecha: limaTodayYmd(), per_page: 80 })
   const [selectedVehicles, setSelectedVehicles] = useState<number[]>([])
   const [target, setTarget] = useState<ReopenTarget | null>(null)
 
@@ -55,7 +52,7 @@ export function HorometrosValidacionesPage() {
   const reopenBulk = useMutation({
     mutationFn: ({ vehicleIds, tipo, motivo, vigencia }: { vehicleIds: number[]; tipo: 'INICIO' | 'CIERRE'; motivo: string; vigencia: number }) =>
       crearHorometroReaperturas({
-        fecha: filters.fecha ?? today(),
+        fecha: filters.fecha ?? limaTodayYmd(),
         vehiculo_ids: vehicleIds,
         tipo_registro: tipo,
         motivo,
@@ -203,7 +200,7 @@ export function HorometrosValidacionesPage() {
                   </span>
                   <ReopenLockButton
                     label="Aperturar vehículo sin registro"
-                    isOpen={hasActiveReopening(logReaperturas, vehiculo.id, filters.fecha ?? today(), 'INICIO')}
+                    isOpen={hasActiveReopening(logReaperturas, vehiculo.id, filters.fecha ?? limaTodayYmd(), 'INICIO')}
                     onClick={() => setTarget({ mode: 'vehiculos', vehicleIds: [vehiculo.id], tipo: 'INICIO' })}
                   />
                 </label>

@@ -38,4 +38,9 @@ class HourmeterValidationTest {
         assertNull(readingError("110", "100", false))
         assertNotNull(readingError("99.99", "100", false))
     }
+
+    @Test fun closingRejectsReadingsAboveConfiguredDailyTolerance() {
+        assertNull(closingReadingError("112", "100", "12"))
+        assertNotNull(closingReadingError("112.01", "100", "12"))
+    }
 }

@@ -12,3 +12,19 @@ internal fun readingError(value: String, reference: String?, opening: Boolean, t
     }
     return null
 }
+
+internal fun closingReadingError(value: String, initial: String?, maxHoursPerDay: String): String? {
+    val baseError = readingError(value, initial, opening = false)
+    if (baseError != null) return baseError
+
+    val number = value.replace(',', '.').toBigDecimalOrNull() ?: return "Ingresa un horometro numerico valido."
+    val initialValue = initial?.toBigDecimalOrNull()?.takeIf { it > java.math.BigDecimal.ZERO } ?: return null
+    val maxHours = maxHoursPerDay.toBigDecimalOrNull()?.max(java.math.BigDecimal.ZERO) ?: return null
+    val worked = number.subtract(initialValue)
+
+    if (worked > maxHours) {
+        return "El cierre supera la tolerancia maxima configurada: $maxHours h."
+    }
+
+    return null
+}

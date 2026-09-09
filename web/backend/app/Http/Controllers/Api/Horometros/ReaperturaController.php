@@ -80,14 +80,15 @@ class ReaperturaController extends Controller
             'vigencia_minutos' => ['nullable', 'integer', 'min:15', 'max:1440'],
         ]);
 
-        $vigencia = (int) ($data['vigencia_minutos'] ?? $this->configuracion()->vigencia_reapertura_minutos);
-        $vigenteHasta = CarbonImmutable::now()->addMinutes($vigencia);
         $fecha = CarbonImmutable::parse($data['fecha'])->toDateString();
+        $vigenciaInput = $data['vigencia_minutos'] ?? null;
 
-        $creadas = DB::transaction(function () use ($data, $fecha, $vigenteHasta) {
+        $creadas = DB::transaction(function () use ($data, $fecha, $vigenciaInput) {
             return collect($data['vehiculo_ids'])
                 ->unique()
-                ->map(function (int $vehiculoId) use ($data, $fecha, $vigenteHasta) {
+                ->map(function (int $vehiculoId) use ($data, $fecha, $vigenciaInput) {
+                    $vigencia = (int) ($vigenciaInput ?? $this->configuracionParaVehiculo($vehiculoId)->vigencia_reapertura_minutos);
+                    $vigenteHasta = CarbonImmutable::now(config('app.timezone'))->addMinutes($vigencia);
                     $registro = HorometroRegistro::query()
                         ->where('vehiculo_id', $vehiculoId)
                         ->whereDate('fecha', $fecha)
@@ -121,6 +122,20 @@ class ReaperturaController extends Controller
                 'reaperturas' => $creadas,
             ],
         ], 201);
+    }
+
+    private function configuracionParaVehiculo(int $vehiculoId): HorometroConfiguracion
+    {
+        $tipoVehiculoId = Vehiculo::query()->whereKey($vehiculoId)->value('tipo_vehiculo_id');
+
+        if ($tipoVehiculoId) {
+            return HorometroConfiguracion::query()
+                ->where('tipo_vehiculo_id', $tipoVehiculoId)
+                ->first()
+                ?? HorometroConfiguracion::query()->create(['tipo_vehiculo_id' => $tipoVehiculoId]);
+        }
+
+        return $this->configuracion();
     }
 
     private function configuracion(): HorometroConfiguracion

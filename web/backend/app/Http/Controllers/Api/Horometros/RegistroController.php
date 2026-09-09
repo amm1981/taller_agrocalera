@@ -234,7 +234,8 @@ class RegistroController extends Controller
             'vigencia_minutos' => ['nullable', 'integer', 'min:15', 'max:1440'],
         ]);
 
-        $vigencia = (int) ($data['vigencia_minutos'] ?? $this->configuracion()->vigencia_reapertura_minutos);
+        $registro->loadMissing('vehiculo');
+        $vigencia = (int) ($data['vigencia_minutos'] ?? $this->configuracion($registro->vehiculo?->tipo_vehiculo_id)->vigencia_reapertura_minutos);
 
         return response()->json([
             'data' => $this->service->reabrir(
@@ -282,8 +283,15 @@ class RegistroController extends Controller
         return $configuracion->foto_obligatoria && (bool) ($configuracion->campos_requeridos['foto'] ?? true);
     }
 
-    private function configuracion(): HorometroConfiguracion
+    private function configuracion(?int $tipoVehiculoId = null): HorometroConfiguracion
     {
+        if ($tipoVehiculoId) {
+            return HorometroConfiguracion::query()
+                ->where('tipo_vehiculo_id', $tipoVehiculoId)
+                ->first()
+                ?? HorometroConfiguracion::query()->create(['tipo_vehiculo_id' => $tipoVehiculoId]);
+        }
+
         return HorometroConfiguracion::query()->first()
             ?? HorometroConfiguracion::query()->create([]);
     }

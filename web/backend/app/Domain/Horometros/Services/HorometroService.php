@@ -33,7 +33,7 @@ class HorometroService
                 }
             }
             $fechaHora = $this->fechaHora($data['fecha_hora_inicio'] ?? null);
-            $fecha = CarbonImmutable::parse($data['fecha'] ?? $fechaHora->toDateString())->toDateString();
+            $fecha = CarbonImmutable::parse($data['fecha'] ?? $fechaHora->toDateString(), config('app.timezone'))->toDateString();
             $reapertura = $this->reaperturaDisponible((int) $data['vehiculo_id'], $fecha, 'INICIO');
             $config = $this->configuracion($vehiculo->tipo_vehiculo_id);
 
@@ -142,11 +142,18 @@ class HorometroService
                 : round((float) $data['horometro_final_confirmado'] - $referenciaBaseCierre, 2);
 
             $estado = 'COMPLETO';
-            $observacion = $registro->observacion;
+            $observacion = null;
 
             if ($horasTrabajadas > (float) $config->tolerancia_maxima_horas_dia) {
-                $estado = 'OBSERVADO';
-                $observacion = 'Las horas trabajadas superan la tolerancia maxima configurada.';
+                throw ValidationException::withMessages([
+                    'horometro_final_confirmado' => [
+                        sprintf(
+                            'El cierre supera la tolerancia máxima configurada. Horas calculadas: %s h. Máximo permitido: %s h.',
+                            $this->formatHorometro($horasTrabajadas),
+                            $this->formatHorometro((float) $config->tolerancia_maxima_horas_dia),
+                        ),
+                    ],
+                ]);
             }
 
             $registro->update([
@@ -245,7 +252,13 @@ class HorometroService
 
         if ($hora < $config->hora_inicio_desde || $hora > $config->hora_inicio_hasta) {
             throw ValidationException::withMessages([
-                'fecha_hora_inicio' => ['El inicio debe registrarse entre 07:00 y 08:00, salvo reapertura.'],
+                'fecha_hora_inicio' => [
+                    sprintf(
+                        'El inicio debe registrarse entre %s y %s, salvo reapertura.',
+                        $this->formatHora($config->hora_inicio_desde),
+                        $this->formatHora($config->hora_inicio_hasta),
+                    ),
+                ],
             ]);
         }
     }
@@ -254,7 +267,12 @@ class HorometroService
     {
         if ($fechaHora->format('H:i:s') > $config->hora_cierre_hasta) {
             throw ValidationException::withMessages([
-                'fecha_hora_final' => ['El cierre debe registrarse hasta las 19:30, salvo reapertura.'],
+                'fecha_hora_final' => [
+                    sprintf(
+                        'El cierre debe registrarse hasta las %s, salvo reapertura.',
+                        $this->formatHora($config->hora_cierre_hasta),
+                    ),
+                ],
             ]);
         }
     }
@@ -366,12 +384,19 @@ class HorometroService
 
     private function fechaHora(?string $value): CarbonImmutable
     {
-        return $value ? CarbonImmutable::parse($value) : CarbonImmutable::now();
+        return $value
+            ? CarbonImmutable::parse($value, config('app.timezone'))->setTimezone(config('app.timezone'))
+            : CarbonImmutable::now(config('app.timezone'));
     }
 
     private function formatHorometro(float $value): string
     {
         return number_format($value, 2, '.', '');
+    }
+
+    private function formatHora(string $value): string
+    {
+        return CarbonImmutable::parse($value, config('app.timezone'))->format('H:i');
     }
 
     private function referenciaValida(mixed $value): ?float

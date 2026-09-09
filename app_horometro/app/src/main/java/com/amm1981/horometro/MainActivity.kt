@@ -133,6 +133,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.time.LocalDate
 import java.time.LocalDateTime
+import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -141,6 +142,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 private const val DEFAULT_API_URL = "https://taller.agrocalera.app/api"
+private val LimaZone: ZoneId = ZoneId.of("America/Lima")
 private val AppBackground = Color(0xFFF6F8F7)
 private val AppGreen = Color(0xFF087A3D)
 private val AppGreenDark = Color(0xFF064E3B)
@@ -1289,6 +1291,7 @@ fun VehicleTypeSelectionScreen(
     onLogout: () -> Unit,
 ) {
     BackHandler(onBack = onBack)
+    val scheduleLabel = remember(types) { scheduleSummary(types) }
 
     Scaffold(
         containerColor = AppBackground,
@@ -1358,7 +1361,7 @@ fun VehicleTypeSelectionScreen(
                 val syncLabel = lastSync?.let { "Ultima sincronizacion: ${displayDateTime(it)}" }
                     ?: "Sin datos locales sincronizados."
                 InfoLine(syncLabel, compact = true)
-                InfoLine("Inicio 7:00 a 8:00 a. m.  Cierre maximo 7:30 p. m.", compact = true)
+                InfoLine(scheduleLabel, compact = true)
                 if (!hasLocalData) {
                     Text("Sincroniza datos antes de ingresar al formulario.", color = AppMuted, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodySmall)
                 }
@@ -1556,10 +1559,15 @@ fun FieldHomeScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val activeRegistrationType = remember(initialData.registrationTypes, registrationType) {
+        initialData.registrationTypes.firstOrNull { synced ->
+            synced.id != null && synced.id == registrationType.id
+        } ?: registrationType
+    }
     var tab by remember { mutableStateOf(FieldTab.Start) }
-    var vehicles by remember(initialData, registrationType) { mutableStateOf(initialData.vehicles.filter { it.matchesType(registrationType) }) }
+    var vehicles by remember(initialData, activeRegistrationType) { mutableStateOf(initialData.vehicles.filter { it.matchesType(activeRegistrationType) }) }
     var operators by remember(initialData) { mutableStateOf(initialData.operators) }
-    var pending by remember(initialData, registrationType) { mutableStateOf(initialData.pending.filter { it.vehicle?.matchesType(registrationType) == true }) }
+    var pending by remember(initialData, activeRegistrationType) { mutableStateOf(initialData.pending.filter { it.vehicle?.matchesType(activeRegistrationType) == true }) }
     var loading by remember { mutableStateOf(false) }
     var sendProgress by remember { mutableStateOf<Int?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -1609,7 +1617,7 @@ fun FieldHomeScreen(
             if (error == null) {
                 success = "Pendientes enviados correctamente."
                 runCatching { api.pendingRecords(token) }.onSuccess { records ->
-                    pending = records.filter { record -> record.vehicle?.matchesType(registrationType) == true }
+                    pending = records.filter { record -> record.vehicle?.matchesType(activeRegistrationType) == true }
                 }
             }
             sendProgress = null
@@ -1626,9 +1634,12 @@ fun FieldHomeScreen(
             runCatching {
                 api.fieldData(session.token)
             }.onSuccess { data ->
-                vehicles = data.vehicles.filter { it.matchesType(registrationType) }
+                val refreshedType = data.registrationTypes.firstOrNull { synced ->
+                    synced.id != null && synced.id == activeRegistrationType.id
+                } ?: activeRegistrationType
+                vehicles = data.vehicles.filter { it.matchesType(refreshedType) }
                 operators = data.operators
-                pending = data.pending.filter { it.vehicle?.matchesType(registrationType) == true }
+                pending = data.pending.filter { it.vehicle?.matchesType(refreshedType) == true }
                 onDataSynced(data)
             }.onFailure {
                 error = it.message ?: "No se pudo cargar informacion."
@@ -1661,7 +1672,7 @@ fun FieldHomeScreen(
                 verticalArrangement = Arrangement.spacedBy(0.dp),
             ) {
                 SimpleTopBar(
-                    title = registrationType.title,
+                    title = activeRegistrationType.title,
                     subtitle = session.userName,
                     onBack = onBack,
                     onLogout = onLogout,
@@ -1716,11 +1727,11 @@ fun FieldHomeScreen(
             ) {
                 when (tab) {
                     FieldTab.Start -> StartScreen(
-                        registrationType = registrationType,
+                        registrationType = activeRegistrationType,
                         vehicles = vehicles,
                         operators = operators,
                         localRecords = localRecords,
-                        config = registrationType.config,
+                        config = activeRegistrationType.config,
                         onCancel = onBack,
                         onRegister = { vehicleId, operatorId, fundoId, sectorId, loteId, confirmed, ocr, manualCorrection, dateTime, photoPath ->
                             val selectedOperator = operators.firstOrNull { it.id == operatorId }
@@ -1744,7 +1755,7 @@ fun FieldHomeScreen(
                     )
 
                     FieldTab.Close -> CloseScreen(
-                        registrationType = registrationType,
+                        registrationType = activeRegistrationType,
                         pending = pending,
                         vehicles = vehicles,
                         localRecords = localRecords,
@@ -2181,10 +2192,7 @@ fun StartScreen(
         }
     }
     val selectedOperator = availableOperators.firstOrNull { it.id == operatorId }
-    val localValues = localRecords.filter { it.vehicleId == vehicleId }
-        .mapNotNull { (it.finalConfirmed ?: it.initialConfirmed).toBigDecimalOrNull() }
-        .filter { it > java.math.BigDecimal.ZERO }
-    val reference = (localValues + listOfNotNull(selected?.lastValid?.toBigDecimalOrNull()?.takeIf { it > java.math.BigDecimal.ZERO })).maxOrNull()?.toPlainString()
+    val reference = selected?.let { latestOpeningReference(it.id, it, localRecords) }
     val validation = readingError(reading, reference, true, config.startToleranceHours)
     val vehicleLabel = registrationType.title
     val photoRequired = registrationType.config.requirePhoto && registrationType.config.requiredPhotoEvidence
@@ -2210,7 +2218,12 @@ fun StartScreen(
             selectedLabel = selected?.let { "${it.code} - ${it.name}" },
             items = filtered, enabled = sedeId != null,
             icon = Icons.Filled.Agriculture, itemLabel = { "${it.code} - ${it.name}" },
-            onSelected = { vehicleId = it.id; reading = ""; photo = null; message = null },
+            onSelected = {
+                vehicleId = it.id
+                reading = latestOpeningReference(it.id, it, localRecords).orEmpty()
+                photo = null
+                message = null
+            },
             trailingAction = {
                 IconButton(enabled = sedeId != null, onClick = { showQr = true }) {
                     Icon(Icons.Filled.QrCodeScanner, contentDescription = "Escanear QR")
@@ -2269,11 +2282,20 @@ fun StartScreen(
         onCode = { code ->
             val found = filtered.firstOrNull { it.code.equals(code.trim(), true) }
             vehicleId = found?.id
-            operatorId = null; reading = ""; photo = null
+            operatorId = null
+            reading = found?.let { latestOpeningReference(it.id, it, localRecords) }.orEmpty()
+            photo = null
             message = if (found == null) "No se encontro el equipo en la sede seleccionada." else null
             showQr = false
         },
     )
+}
+
+private fun latestOpeningReference(vehicleId: Int, vehicle: Vehicle?, records: List<LocalHourmeterRecord>): String? {
+    return (records.filter { it.vehicleId == vehicleId }.mapNotNull { (it.finalConfirmed ?: it.initialConfirmed).toBigDecimalOrNull()?.takeIf { value -> value > java.math.BigDecimal.ZERO } }
+        + listOfNotNull(vehicle?.lastValid?.toBigDecimalOrNull()?.takeIf { it > java.math.BigDecimal.ZERO }))
+        .maxOrNull()
+        ?.toPlainString()
 }
 
 private fun latestLocalReference(vehicleId: Int, initial: String, vehicles: List<Vehicle>, records: List<LocalHourmeterRecord>): String {
@@ -2631,11 +2653,12 @@ fun QrScannerBottomSheet(
 fun CloseCaptureReviewCard(
     draft: HourmeterCaptureDraft,
     minimum: String,
+    maxHoursPerDay: String,
     onRetake: () -> Unit,
     onSave: (String, String?, String, String) -> Unit,
 ) {
     var confirmed by remember(draft) { mutableStateOf(draft.confirmedValue) }
-    val validation = readingError(confirmed, minimum, false)
+    val validation = closingReadingError(confirmed, minimum, maxHoursPerDay)
 
     Card(
         shape = RoundedCornerShape(18.dp),
@@ -2727,10 +2750,10 @@ fun CloseScreen(
             contentPadding = PaddingValues(bottom = 96.dp),
         ) {
             lazyItems(localPendingClose, key = { it.localId }) { record ->
-                LocalPendingCard(record = record, minimum = latestLocalReference(record.vehicleId, record.initialConfirmed, vehicles, localRecords), photoRequired = photoRequired, onClose = onCloseLocal)
+                LocalPendingCard(record = record, minimum = latestLocalReference(record.vehicleId, record.initialConfirmed, vehicles, localRecords), maxHoursPerDay = registrationType.config.maxHoursPerDay, photoRequired = photoRequired, onClose = onCloseLocal)
             }
             lazyItems(remotePending, key = { it.id }) { record ->
-                PendingCard(record = record, minimum = latestLocalReference(record.vehicle?.id ?: 0, record.initial ?: "0", vehicles, localRecords), photoRequired = photoRequired, onClose = onClose)
+                PendingCard(record = record, minimum = latestLocalReference(record.vehicle?.id ?: 0, record.initial ?: "0", vehicles, localRecords), maxHoursPerDay = registrationType.config.maxHoursPerDay, photoRequired = photoRequired, onClose = onClose)
             }
             if (remotePending.isEmpty() && localPendingClose.isEmpty()) {
                 item {
@@ -2758,6 +2781,7 @@ fun CloseScreen(
 fun LocalPendingCard(
     record: LocalHourmeterRecord,
     minimum: String,
+    maxHoursPerDay: String,
     photoRequired: Boolean,
     onClose: (String, String, String?, String, String?) -> Unit,
 ) {
@@ -2819,7 +2843,7 @@ fun LocalPendingCard(
             }
             if (canClose) {
                 if (draft == null) {
-                    val validation = readingError(reading, minimum, false)
+                    val validation = closingReadingError(reading, minimum, maxHoursPerDay)
                     AppTextField("Horometro de cierre", reading, { reading = it }, KeyboardType.Decimal, suffixText = "h")
                     if (reading.isNotBlank()) validation?.let { ErrorBox(it) }
                     if (!photoRequired) {
@@ -2852,6 +2876,7 @@ fun LocalPendingCard(
                     CloseCaptureReviewCard(
                         draft = draft!!,
                         minimum = minimum,
+                        maxHoursPerDay = maxHoursPerDay,
                         onRetake = { draft = null },
                         onSave = { confirmed, ocr, dateTime, photoPath ->
                             onClose(record.localId, confirmed, ocr, dateTime, photoPath)
@@ -2870,6 +2895,7 @@ fun LocalPendingCard(
 fun PendingCard(
     record: HourmeterRecord,
     minimum: String,
+    maxHoursPerDay: String,
     photoRequired: Boolean,
     onClose: (Int, String, String?, String, String?) -> Unit,
 ) {
@@ -2926,7 +2952,7 @@ fun PendingCard(
                 ReadingBox("Horas", record.hours ?: "-", Modifier.weight(1f))
             }
             if (draft == null) {
-                val validation = readingError(reading, minimum, false)
+                val validation = closingReadingError(reading, minimum, maxHoursPerDay)
                 AppTextField("Horometro de cierre", reading, { reading = it }, KeyboardType.Decimal, suffixText = "h")
                 if (reading.isNotBlank()) validation?.let { ErrorBox(it) }
                 if (!photoRequired) {
@@ -2959,6 +2985,7 @@ fun PendingCard(
                 CloseCaptureReviewCard(
                     draft = draft!!,
                     minimum = minimum,
+                    maxHoursPerDay = maxHoursPerDay,
                     onRetake = { draft = null },
                     onSave = { confirmed, ocr, dateTime, photoPath ->
                         onClose(record.id, confirmed, ocr, dateTime, photoPath)
@@ -3716,11 +3743,11 @@ fun SuccessBox(message: String) {
 private fun defaultDateTime(hour: String): String {
     val normalizedHour = if (hour.count { it == ':' } == 1) "$hour:00" else hour
 
-    return "${LocalDate.now()}T$normalizedHour"
+    return "${LocalDate.now(LimaZone)}T$normalizedHour"
 }
 
 private fun currentDateTime(): String {
-    return LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss"))
+    return LocalDateTime.now(LimaZone).format(DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss"))
 }
 
 private fun displayDateTime(value: String?): String {
@@ -3765,7 +3792,7 @@ private fun historyDateTitle(dateKey: String): String {
     val date = runCatching { LocalDate.parse(dateKey) }.getOrNull()
         ?: return "Sin fecha"
     val formatted = date.format(DateTimeFormatter.ofPattern("dd/MM/yyyy"))
-    val today = LocalDate.now()
+    val today = LocalDate.now(LimaZone)
 
     return when (date) {
         today -> "Hoy · $formatted"
@@ -3781,15 +3808,47 @@ private fun normalizeDateTimeForParsing(value: String): String {
 }
 
 private fun photoReference(kind: String, id: Int): String {
-    val timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMddHHmmss"))
-    return "android/horometros/${LocalDate.now()}/$id/$kind-$timestamp.jpg"
+    val timestamp = LocalDateTime.now(LimaZone).format(DateTimeFormatter.ofPattern("yyyyMMddHHmmss"))
+    return "android/horometros/${LocalDate.now(LimaZone)}/$id/$kind-$timestamp.jpg"
 }
 
 private fun createEvidenceFile(root: File, kind: String): File {
-    val directory = File(root, "horometros/${LocalDate.now()}").apply { mkdirs() }
-    val timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMddHHmmssSSS"))
+    val directory = File(root, "horometros/${LocalDate.now(LimaZone)}").apply { mkdirs() }
+    val timestamp = LocalDateTime.now(LimaZone).format(DateTimeFormatter.ofPattern("yyyyMMddHHmmssSSS"))
 
     return File(directory, "$kind-$timestamp.jpg")
+}
+
+private fun scheduleSummary(types: List<RegistrationType>): String {
+    val configs = types.map { it.config }
+
+    if (configs.isEmpty()) {
+        val config = HourmeterConfig.DEFAULT
+        return "Inicio ${displayHour(config.startFrom)} a ${displayHour(config.startTo)}. Cierre maximo ${displayHour(config.closeUntil)}."
+    }
+
+    val first = configs.first()
+    val sameSchedule = configs.all {
+        it.startFrom == first.startFrom && it.startTo == first.startTo && it.closeUntil == first.closeUntil
+    }
+
+    return if (sameSchedule) {
+        "Inicio ${displayHour(first.startFrom)} a ${displayHour(first.startTo)}. Cierre maximo ${displayHour(first.closeUntil)}."
+    } else {
+        "Horarios segun el tipo seleccionado. Sincroniza para ver la configuracion vigente."
+    }
+}
+
+private fun displayHour(value: String): String {
+    val normalized = if (value.count { it == ':' } == 1) "$value:00" else value
+
+    return runCatching {
+        val time = java.time.LocalTime.parse(normalized)
+        time.format(DateTimeFormatter.ofPattern("h:mm a"))
+            .lowercase()
+            .replace("am", "a. m.")
+            .replace("pm", "p. m.")
+    }.getOrDefault(value)
 }
 
 private fun encodeFileAsBase64(path: String): String {

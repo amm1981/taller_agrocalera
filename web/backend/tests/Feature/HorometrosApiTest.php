@@ -326,6 +326,58 @@ class HorometrosApiTest extends TestCase
         $this->assertNotNull($registro->refresh()->horometro_final_confirmado);
     }
 
+    public function test_app_sync_exposes_type_schedule_configuration(): void
+    {
+        $this->seed(DatabaseSeeder::class);
+        $usuario = $this->appUser();
+        $tractor = TipoVehiculo::where('nombre', 'Tractor')->firstOrFail();
+        $usuario->tiposVehiculo()->sync([$tractor->id]);
+        HorometroConfiguracion::query()->updateOrCreate(
+            ['tipo_vehiculo_id' => $tractor->id],
+            [
+                'hora_inicio_desde' => '07:00:00',
+                'hora_inicio_hasta' => '23:00:00',
+                'hora_cierre_hasta' => '23:30:00',
+            ],
+        );
+
+        $token = $usuario->createToken('app-test')->plainTextToken;
+
+        $config = $this
+            ->withToken($token)
+            ->getJson('/api/app/horometros/sync')
+            ->assertOk()
+            ->json('data.tipos_registro.0.configuracion_horometro');
+
+        $this->assertSame('07:00:00', $config['hora_inicio_desde']);
+        $this->assertSame('23:00:00', $config['hora_inicio_hasta']);
+        $this->assertSame('23:30:00', $config['hora_cierre_hasta']);
+    }
+
+    public function test_closing_above_daily_tolerance_is_rejected(): void
+    {
+        $this->seed(DatabaseSeeder::class);
+        $registro = $this->registroEnJornada('2026-08-26', 100);
+        HorometroConfiguracion::query()->updateOrCreate(
+            ['tipo_vehiculo_id' => $registro->vehiculo->tipo_vehiculo_id],
+            ['tolerancia_maxima_horas_dia' => 8],
+        );
+
+        $this
+            ->withToken($this->adminToken())
+            ->postJson("/api/horometros/{$registro->id}/cierre", [
+                'horometro_final_confirmado' => 109,
+                'foto_final' => 'final.jpg',
+                'fecha_hora_final' => '2026-08-26 18:00:00',
+            ])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors(['horometro_final_confirmado'])
+            ->assertJsonPath(
+                'errors.horometro_final_confirmado.0',
+                'El cierre supera la tolerancia máxima configurada. Horas calculadas: 9.00 h. Máximo permitido: 8.00 h.',
+            );
+    }
+
     public function test_duplicate_daily_start_is_rejected_without_reopening(): void
     {
         $this->seed(DatabaseSeeder::class);
@@ -836,6 +888,25 @@ class HorometrosApiTest extends TestCase
             'nombres' => 'Luis',
             'apellidos' => 'Operario',
             'tipo' => 'OPERARIO',
+            'estado' => 'ACTIVO',
+        ]);
+    }
+
+    private function appUser(): UsuarioAplicativo
+    {
+        $personal = Personal::query()->create([
+            'dni' => '77778888',
+            'nombres' => 'Usuario',
+            'apellidos' => 'Aplicativo',
+            'tipo' => 'TRACTORISTA',
+            'estado' => 'ACTIVO',
+        ]);
+
+        return UsuarioAplicativo::query()->create([
+            'personal_id' => $personal->id,
+            'nombre' => 'Usuario Aplicativo',
+            'usuario' => 'usuario.app',
+            'password' => Hash::make('usuario.app'),
             'estado' => 'ACTIVO',
         ]);
     }

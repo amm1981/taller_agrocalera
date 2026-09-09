@@ -50,6 +50,8 @@ export type TipoVehiculo = {
   requiere_horometro: boolean
   requiere_login_horometro: boolean
   estado: MasterStatus
+  icono_path?: string | null
+  icono_url?: string | null
 }
 
 export type TipoFalla = {

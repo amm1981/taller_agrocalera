@@ -6,6 +6,10 @@ use App\Http\Controllers\Controller;
 use App\Models\HorometroConfiguracion;
 use App\Models\TipoVehiculo;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 
 class ConfiguracionController extends Controller
 {
@@ -32,6 +36,50 @@ class ConfiguracionController extends Controller
     public function show(): array
     {
         return ['data' => $this->configuracion()];
+    }
+
+    public function store(Request $request): array
+    {
+        $data = $request->validate([
+            'nombre' => ['required', 'string', 'max:120', Rule::unique('tipos_vehiculo', 'nombre')],
+            'icono' => ['required', 'file', 'mimes:png', 'max:128'],
+        ]);
+
+        $file = $request->file('icono');
+        $size = $file ? @getimagesize($file->getRealPath()) : false;
+
+        if (! $size || $size[0] > 50 || $size[1] > 50) {
+            throw ValidationException::withMessages([
+                'icono' => ['El icono debe ser PNG y no debe superar 50x50 px.'],
+            ]);
+        }
+
+        $tipoVehiculo = TipoVehiculo::query()->create([
+            'nombre' => $data['nombre'],
+            'requiere_horometro' => true,
+            'requiere_login_horometro' => false,
+            'estado' => 'ACTIVO',
+        ]);
+
+        $path = sprintf(
+            'horometros/tipos-registro/%s-%s/icono.png',
+            $tipoVehiculo->id,
+            Str::slug($tipoVehiculo->nombre),
+        );
+
+        Storage::disk(config('filesystems.evidence_disk', 'public'))->put($path, file_get_contents($file->getRealPath()));
+        $tipoVehiculo->update(['icono_path' => $path]);
+
+        $configuracion = HorometroConfiguracion::query()->create([
+            'tipo_vehiculo_id' => $tipoVehiculo->id,
+        ]);
+
+        return [
+            'data' => [
+                'tipo_vehiculo' => $tipoVehiculo->refresh(),
+                'configuracion' => $configuracion->refresh(),
+            ],
+        ];
     }
 
     public function update(Request $request): array

@@ -1,6 +1,7 @@
 package com.amm1981.horometro
 
 import android.Manifest
+import android.app.Activity
 import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
@@ -154,6 +155,8 @@ data class RegistrationType(
     val title: String,
     val subtitle: String,
     val config: HourmeterConfig = HourmeterConfig.DEFAULT,
+    val iconUrl: String? = null,
+    val localIconPath: String? = null,
 )
 
 data class Vehicle(
@@ -702,6 +705,7 @@ private fun parseRegistrationTypes(items: JSONArray?): List<RegistrationType> {
             title = item.optString("nombre", "Registro"),
             subtitle = "Registro de horómetro",
             config = item.optJSONObject("configuracion_horometro")?.let(::configFromJson) ?: HourmeterConfig.DEFAULT,
+            iconUrl = item.nullableString("icono_url"),
         )
     }
 }
@@ -712,6 +716,8 @@ private fun RegistrationType.toJson(): JSONObject {
         .put("title", title)
         .put("subtitle", subtitle)
         .put("config", config.toJson())
+        .putNullable("icon_url", iconUrl)
+        .putNullable("local_icon_path", localIconPath)
 }
 
 private fun registrationTypeFromCacheJson(json: JSONObject): RegistrationType {
@@ -720,6 +726,8 @@ private fun registrationTypeFromCacheJson(json: JSONObject): RegistrationType {
         title = json.optString("title", "Registro"),
         subtitle = json.optString("subtitle", "Registro de horómetro"),
         config = json.optJSONObject("config")?.let(::configFromCacheJson) ?: HourmeterConfig.DEFAULT,
+        iconUrl = json.nullableString("icon_url"),
+        localIconPath = json.nullableString("local_icon_path"),
     )
 }
 
@@ -801,6 +809,36 @@ private fun loadFieldDataCache(context: Context, userId: Int): CachedFieldData? 
 
         cachedFieldDataFromJson(JSONObject(file.readText()))
     }.getOrNull()
+}
+
+private suspend fun cacheRegistrationIcons(context: Context, userId: Int, data: FieldData): FieldData = withContext(Dispatchers.IO) {
+    val types = data.registrationTypes.map { type ->
+        val url = type.iconUrl
+        if (url.isNullOrBlank()) {
+            type
+        } else {
+            val path = runCatching {
+                val typeKey = type.id?.toString() ?: type.title.filter { it.isLetterOrDigit() }.ifBlank { "registro" }
+                val file = File(context.filesDir, "horometro_tipo_${userId}_${typeKey}_${Integer.toHexString(url.hashCode())}.png")
+
+                if (!file.exists()) {
+                    (URL(url).openConnection() as HttpURLConnection).apply {
+                        connectTimeout = 10_000
+                        readTimeout = 10_000
+                        requestMethod = "GET"
+                    }.inputStream.use { input ->
+                        file.outputStream().use { output -> input.copyTo(output) }
+                    }
+                }
+
+                file.absolutePath
+            }.getOrNull()
+
+            type.copy(localIconPath = path ?: type.localIconPath)
+        }
+    }
+
+    data.copy(registrationTypes = types)
 }
 
 private fun AppSession.toJson(): JSONObject {
@@ -1143,7 +1181,8 @@ fun HorometroApp() {
             runCatching {
                 syncProgress = 8
                 val data = api.fieldData(currentSession.token) { progress -> syncProgress = progress }
-                val cached = CachedFieldData(data = data, syncedAt = currentDateTime())
+                val dataWithIcons = cacheRegistrationIcons(context, currentSession.userId, data)
+                val cached = CachedFieldData(data = dataWithIcons, syncedAt = currentDateTime())
                 saveFieldDataCache(context, currentSession.userId, cached)
                 cached
             }.onSuccess { cached ->
@@ -1168,8 +1207,8 @@ fun HorometroApp() {
         session == null -> ResponsibleLoginScreen(
             title = "AgroCalera Taller",
             subtitle = "Ingreso al aplicativo",
-            formTitle = "Ingreso seguro",
-            formSubtitle = "Usa tu usuario asignado para registrar horómetros.",
+            formTitle = "Inicio de Sesión",
+            formSubtitle = "Ingresa tu usuario y contraseña.",
             infoText = "Tus permisos definen qué tipos de registro puedes ver y capturar.",
             showBack = false,
             onLogin = { usuario, password -> api.login(usuario, password) },
@@ -1180,7 +1219,9 @@ fun HorometroApp() {
                 selectedType = null
                 syncMasters(it)
             },
-            onBack = {},
+            onBack = {
+                (context as? Activity)?.moveTaskToBack(true)
+            },
         )
 
         selectedType == null -> VehicleTypeSelectionScreen(
@@ -1198,12 +1239,7 @@ fun HorometroApp() {
                     selectedType = type
                 }
             },
-            onBack = {
-                clearAppSession(context)
-                session = null
-                selectedType = null
-                cachedData = null
-            },
+            onBack = {},
             onLogout = {
                 clearAppSession(context)
                 session = null
@@ -1291,6 +1327,7 @@ fun VehicleTypeSelectionScreen(
                         title = type.title,
                         subtitle = type.subtitle,
                         icon = iconForRegistrationType(type),
+                        iconPath = type.localIconPath,
                         selected = false,
                         onClick = { onSelect(type) },
                     )
@@ -1406,8 +1443,8 @@ fun SimpleTopBar(title: String, subtitle: String, onBack: (() -> Unit)? = null, 
 fun ResponsibleLoginScreen(
     title: String = "AgroCalera Taller",
     subtitle: String = "Ingreso al aplicativo",
-    formTitle: String = "Ingreso seguro",
-    formSubtitle: String = "Usa tu usuario asignado para registrar horómetros.",
+    formTitle: String = "Inicio de Sesión",
+    formSubtitle: String = "Ingresa tu usuario y contraseña",
     infoText: String = "Tus permisos definen qué tipos de registro puedes ver y capturar.",
     showBack: Boolean = true,
     onLogin: suspend (String, String) -> AppSession,
@@ -1502,7 +1539,6 @@ fun ResponsibleLoginScreen(
                     }
                 }
             }
-            InfoLine(infoText)
         }
     }
 }
@@ -1635,8 +1671,8 @@ fun FieldHomeScreen(
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp))
                         .background(AppBackground)
-                        .padding(horizontal = 14.dp, vertical = 12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
                     TabButton("Inicio", tab == FieldTab.Start, Modifier.weight(1f)) { tab = FieldTab.Start }
                     TabButton("Cierre", tab == FieldTab.Close, Modifier.weight(1f)) { tab = FieldTab.Close }
@@ -3008,10 +3044,15 @@ fun VehicleOptionCard(
     title: String,
     subtitle: String,
     icon: ImageVector,
+    iconPath: String? = null,
     selected: Boolean,
     onClick: () -> Unit,
 ) {
     val borderColor = if (selected) AppGreen else AppLine
+    val bitmap = remember(iconPath) {
+        iconPath?.takeIf { it.isNotBlank() }?.let { BitmapFactory.decodeFile(it) }
+    }
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -3035,7 +3076,16 @@ fun VehicleOptionCard(
                     .background(if (selected) AppGreen else Color(0xFFEAF7ED)),
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(icon, contentDescription = null, tint = if (selected) Color.White else AppGreen, modifier = Modifier.size(34.dp))
+                if (bitmap != null && !selected) {
+                    Image(
+                        bitmap = bitmap.asImageBitmap(),
+                        contentDescription = null,
+                        modifier = Modifier.size(42.dp),
+                        contentScale = ContentScale.Fit,
+                    )
+                } else {
+                    Icon(icon, contentDescription = null, tint = if (selected) Color.White else AppGreen, modifier = Modifier.size(34.dp))
+                }
             }
             Spacer(Modifier.width(16.dp))
             Column(Modifier.weight(1f), horizontalAlignment = Alignment.Start) {
@@ -3570,12 +3620,13 @@ private fun LocationOption.label(): String {
 @Composable
 fun TabButton(label: String, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
     Button(
-        modifier = modifier.height(46.dp),
+        modifier = modifier.height(40.dp),
         shape = RoundedCornerShape(12.dp),
         colors = ButtonDefaults.buttonColors(
             containerColor = if (selected) Color.White else Color.Transparent,
             contentColor = if (selected) AppGreenDark else AppMuted,
         ),
+        contentPadding = PaddingValues(horizontal = 8.dp),
         elevation = ButtonDefaults.buttonElevation(defaultElevation = if (selected) 2.dp else 0.dp),
         onClick = onClick,
     ) {
@@ -3586,10 +3637,10 @@ fun TabButton(label: String, selected: Boolean, modifier: Modifier = Modifier, o
                 else -> Icons.Filled.Speed
             },
             contentDescription = null,
-            modifier = Modifier.size(18.dp),
+            modifier = Modifier.size(16.dp),
         )
-        Spacer(Modifier.width(6.dp))
-        Text(label, fontWeight = FontWeight.Black, style = MaterialTheme.typography.bodyMedium)
+        Spacer(Modifier.width(4.dp))
+        Text(label, fontWeight = FontWeight.Black, style = MaterialTheme.typography.bodySmall)
     }
 }
 

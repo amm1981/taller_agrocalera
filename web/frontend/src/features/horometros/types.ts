@@ -157,6 +157,8 @@ export type HorometroConfiguracionPorTipo = {
     id: number
     nombre: string
     estado: string
+    icono_path?: string | null
+    icono_url?: string | null
   }
   configuracion: HorometroConfiguracion
 }

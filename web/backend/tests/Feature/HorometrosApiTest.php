@@ -15,6 +15,7 @@ use App\Models\UsuarioAplicativo;
 use App\Models\Vehiculo;
 use Database\Seeders\DatabaseSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
@@ -715,6 +716,33 @@ class HorometrosApiTest extends TestCase
         $this->assertNotContains($machineryType->id, collect($sync->json('data.tipos_registro'))->pluck('id')->all());
         $this->assertTrue(collect($sync->json('data.vehiculos'))->every(fn (array $item) => $item['tipo_vehiculo_id'] === $tractorType->id));
         $this->assertTrue(collect($sync->json('data.pendientes'))->every(fn (array $item) => $item['usuario_aplicativo_id'] === $appUser->id));
+    }
+
+    public function test_admin_can_create_hourmeter_registration_type_with_png_icon(): void
+    {
+        config(['filesystems.evidence_disk' => 'public']);
+        Storage::fake('public');
+        $this->seed(DatabaseSeeder::class);
+        $path = tempnam(sys_get_temp_dir(), 'tipo_icon_');
+        file_put_contents($path, base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='));
+
+        $response = $this
+            ->withToken($this->adminToken())
+            ->post('/api/horometros/configuraciones', [
+                'nombre' => 'Motos',
+                'icono' => new UploadedFile($path, 'motos.png', 'image/png', null, true),
+            ]);
+
+        @unlink($path);
+
+        $response
+            ->assertOk()
+            ->assertJsonPath('data.tipo_vehiculo.nombre', 'Motos')
+            ->assertJsonPath('data.configuracion.tipo_vehiculo_id', TipoVehiculo::where('nombre', 'Motos')->value('id'));
+
+        $tipo = TipoVehiculo::where('nombre', 'Motos')->firstOrFail();
+        $this->assertNotNull($tipo->icono_path);
+        Storage::disk('public')->assertExists($tipo->icono_path);
     }
 
     public function test_heavy_machinery_app_sync_returns_configured_maquinistas(): void

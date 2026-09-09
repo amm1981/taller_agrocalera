@@ -12,6 +12,7 @@ import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.net.Uri
 import android.os.Bundle
+import android.provider.Settings
 import android.util.Base64
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -103,6 +104,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccessTime
@@ -1192,6 +1194,9 @@ fun HorometroApp() {
     var syncError by remember { mutableStateOf<String?>(null) }
     var appUpdate by remember { mutableStateOf<AppUpdate?>(null) }
     var dismissedUpdateCode by remember { mutableStateOf<Int?>(null) }
+    var updateDownloading by remember { mutableStateOf(false) }
+    var updateProgress by remember { mutableStateOf(0) }
+    var updateError by remember { mutableStateOf<String?>(null) }
     val api = remember { AgroControlApi(DEFAULT_API_URL.trimEnd('/')) }
 
     fun checkForUpdates() {
@@ -1328,7 +1333,25 @@ fun HorometroApp() {
     if (visibleUpdate != null) {
         AppUpdateDialog(
             update = visibleUpdate,
-            onDownload = { openDownload(context, visibleUpdate.downloadUrl) },
+            downloading = updateDownloading,
+            progress = updateProgress,
+            error = updateError,
+            onDownload = {
+                updateDownloading = true
+                updateProgress = 0
+                updateError = null
+                scope.launch {
+                    runCatching {
+                        val apk = downloadUpdateApk(context, visibleUpdate) { progress ->
+                            updateProgress = progress
+                        }
+                        installDownloadedApk(context, apk)
+                    }.onFailure {
+                        updateError = it.message ?: "No se pudo descargar la actualizacion."
+                    }
+                    updateDownloading = false
+                }
+            },
             onDismiss = {
                 if (!visibleUpdate.required) {
                     dismissedUpdateCode = visibleUpdate.versionCode
@@ -1341,6 +1364,9 @@ fun HorometroApp() {
 @Composable
 fun AppUpdateDialog(
     update: AppUpdate,
+    downloading: Boolean,
+    progress: Int,
+    error: String?,
     onDownload: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -1360,19 +1386,41 @@ fun AppUpdateDialog(
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Version ${update.versionName} (${update.versionCode})", color = AppGreenDark, fontWeight = FontWeight.Black)
                 Text(update.message, color = AppMuted, style = MaterialTheme.typography.bodyMedium)
+                if (downloading) {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        LinearProgressIndicator(
+                            progress = { (progress.coerceIn(0, 100)) / 100f },
+                            modifier = Modifier.fillMaxWidth(),
+                            color = AppGreen,
+                        )
+                        Text("Descargando $progress%", color = AppMuted, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+                if (!error.isNullOrBlank()) {
+                    Text(error, color = Color(0xFFBE123C), fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall)
+                }
                 if (update.required) {
                     Text("Esta actualizacion es obligatoria para continuar.", color = Color(0xFFBE123C), fontWeight = FontWeight.Bold)
                 }
             }
         },
         confirmButton = {
-            Button(onClick = onDownload, colors = ButtonDefaults.buttonColors(containerColor = AppGreen, contentColor = Color.White)) {
-                Icon(Icons.Filled.Download, contentDescription = null)
-                Text("Actualizar")
+            Button(
+                onClick = onDownload,
+                enabled = !downloading,
+                colors = ButtonDefaults.buttonColors(containerColor = AppGreen, contentColor = Color.White),
+            ) {
+                if (downloading) {
+                    CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp)
+                    Text("$progress%")
+                } else {
+                    Icon(Icons.Filled.Download, contentDescription = null)
+                    Text("Actualizar")
+                }
             }
         },
         dismissButton = {
-            if (!update.required) {
+            if (!update.required && !downloading) {
                 TextButton(onClick = onDismiss) {
                     Text("Despues", color = AppGreenDark, fontWeight = FontWeight.Bold)
                 }
@@ -1381,10 +1429,82 @@ fun AppUpdateDialog(
     )
 }
 
-private fun openDownload(context: Context, url: String) {
-    runCatching {
-        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+private suspend fun downloadUpdateApk(
+    context: Context,
+    update: AppUpdate,
+    onProgress: (Int) -> Unit,
+): File = withContext(Dispatchers.IO) {
+    onProgress(0)
+    val directory = File(context.cacheDir, "updates").apply { mkdirs() }
+    directory.listFiles()?.forEach { file ->
+        if (file.extension.equals("apk", ignoreCase = true)) {
+            file.delete()
+        }
     }
+    val outputFile = File(directory, "agrocontrol-${update.versionCode}.apk")
+    val connection = (URL(update.downloadUrl).openConnection() as HttpURLConnection).apply {
+        requestMethod = "GET"
+        connectTimeout = 30_000
+        readTimeout = 120_000
+        setRequestProperty("Accept", "application/vnd.android.package-archive,*/*")
+    }
+
+    try {
+        val status = connection.responseCode
+        if (status !in 200..299) {
+            throw IllegalStateException("No se pudo descargar el APK. Error HTTP $status.")
+        }
+
+        val totalBytes = connection.contentLengthLong.takeIf { it > 0L }
+        var downloadedBytes = 0L
+        val buffer = ByteArray(64 * 1024)
+
+        connection.inputStream.use { input ->
+            outputFile.outputStream().use { output ->
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read == -1) {
+                        break
+                    }
+
+                    output.write(buffer, 0, read)
+                    downloadedBytes += read
+
+                    if (totalBytes != null) {
+                        onProgress(((downloadedBytes * 100) / totalBytes).toInt().coerceIn(0, 99))
+                    }
+                }
+            }
+        }
+    } finally {
+        connection.disconnect()
+    }
+
+    if (!outputFile.exists() || outputFile.length() == 0L) {
+        throw IllegalStateException("La descarga del APK quedo vacia.")
+    }
+
+    onProgress(100)
+    outputFile
+}
+
+private fun installDownloadedApk(context: Context, apk: File) {
+    if (!context.packageManager.canRequestPackageInstalls()) {
+        val settingsIntent = Intent(
+            Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+            Uri.parse("package:${context.packageName}"),
+        ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        context.startActivity(settingsIntent)
+        throw IllegalStateException("Autoriza la instalacion desde esta app y vuelve a pulsar Actualizar.")
+    }
+
+    val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", apk)
+    val intent = Intent(Intent.ACTION_VIEW).apply {
+        setDataAndType(uri, "application/vnd.android.package-archive")
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    context.startActivity(intent)
 }
 
 @Composable

@@ -1303,7 +1303,10 @@ fun VehicleTypeSelectionScreen(
                         .fillMaxWidth()
                         .height(56.dp),
                     enabled = !syncing,
-                    colors = ButtonDefaults.buttonColors(containerColor = if (hasLocalData) AppGreenDark else AppGreen),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (hasLocalData) AppGreenDark else AppGreen,
+                        contentColor = Color.White,
+                    ),
                     shape = RoundedCornerShape(18.dp),
                     onClick = onSync,
                 ) {
@@ -1427,11 +1430,20 @@ fun ResponsibleLoginScreen(
             .imePadding()
             .verticalScroll(rememberScrollState()),
     ) {
-        SimpleTopBar(
-            title = title,
-            subtitle = subtitle,
-            onBack = if (showBack) onBack else null,
-        )
+        Box {
+            AppLogoHeader()
+            if (showBack) {
+                IconButton(
+                    modifier = Modifier
+                        .statusBarsPadding()
+                        .padding(start = 8.dp, top = 8.dp)
+                        .align(Alignment.TopStart),
+                    onClick = onBack,
+                ) {
+                    Icon(Icons.Filled.ArrowBack, contentDescription = "Volver", tint = Color.White)
+                }
+            }
+        }
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1467,7 +1479,7 @@ fun ResponsibleLoginScreen(
                             .fillMaxWidth()
                             .height(52.dp),
                         enabled = !loading,
-                        colors = ButtonDefaults.buttonColors(containerColor = AppGreen),
+                        colors = ButtonDefaults.buttonColors(containerColor = AppGreen, contentColor = Color.White),
                         shape = RoundedCornerShape(16.dp),
                         onClick = {
                             loading = true
@@ -1888,7 +1900,7 @@ fun HistoryScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(48.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = AppGreenDark),
+                colors = ButtonDefaults.buttonColors(containerColor = AppGreenDark, contentColor = Color.White),
                 shape = RoundedCornerShape(16.dp),
                 onClick = onSendPending,
             ) {
@@ -2321,7 +2333,7 @@ fun CameraCaptureContent(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(52.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = AppGreen),
+                colors = ButtonDefaults.buttonColors(containerColor = AppGreen, contentColor = Color.White),
                 shape = RoundedCornerShape(16.dp),
                 onClick = { permissionLauncher.launch(Manifest.permission.CAMERA) },
             ) {
@@ -2378,7 +2390,7 @@ fun CameraCaptureContent(
                     .fillMaxWidth()
                     .height(54.dp),
                 enabled = imageCapture != null && !loading,
-                colors = ButtonDefaults.buttonColors(containerColor = AppGreen),
+                colors = ButtonDefaults.buttonColors(containerColor = AppGreen, contentColor = Color.White),
                 shape = RoundedCornerShape(16.dp),
                 onClick = {
                     val capture = imageCapture ?: return@Button
@@ -2492,7 +2504,7 @@ fun QrScannerBottomSheet(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(50.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = AppGreen),
+                    colors = ButtonDefaults.buttonColors(containerColor = AppGreen, contentColor = Color.White),
                     shape = RoundedCornerShape(16.dp),
                     onClick = { permissionLauncher.launch(Manifest.permission.CAMERA) },
                 ) {
@@ -2620,7 +2632,7 @@ fun CloseCaptureReviewCard(
                         .weight(1f)
                         .height(48.dp),
                     enabled = validation == null,
-                    colors = ButtonDefaults.buttonColors(containerColor = AppGreen),
+                    colors = ButtonDefaults.buttonColors(containerColor = AppGreen, contentColor = Color.White),
                     shape = RoundedCornerShape(16.dp),
                     onClick = { onSave(confirmed.replace(',', '.'), null, draft.dateTime, draft.photoPath) },
                 ) {
@@ -2662,7 +2674,7 @@ fun CloseScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(48.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = AppGreenDark),
+                colors = ButtonDefaults.buttonColors(containerColor = AppGreenDark, contentColor = Color.White),
                 shape = RoundedCornerShape(16.dp),
                 onClick = onSendPending,
             ) {
@@ -2792,7 +2804,7 @@ fun LocalPendingCard(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(50.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = AppGreen),
+                        colors = ButtonDefaults.buttonColors(containerColor = AppGreen, contentColor = Color.White),
                         shape = RoundedCornerShape(16.dp),
                         onClick = { showCamera = true },
                     ) {
@@ -2899,7 +2911,7 @@ fun PendingCard(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(50.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = AppGreen),
+                    colors = ButtonDefaults.buttonColors(containerColor = AppGreen, contentColor = Color.White),
                     shape = RoundedCornerShape(16.dp),
                     onClick = { showCamera = true },
                 ) {
@@ -3520,9 +3532,16 @@ fun AppTextField(
             focusedBorderColor = AppGreen,
             unfocusedBorderColor = AppLine,
             focusedLabelColor = AppGreenDark,
+            focusedTextColor = AppText,
+            unfocusedTextColor = AppText,
+            disabledTextColor = AppMuted,
+            errorTextColor = AppText,
+            focusedPlaceholderColor = AppMuted,
+            unfocusedPlaceholderColor = AppMuted,
             cursorColor = AppGreen,
             focusedContainerColor = Color.White,
             unfocusedContainerColor = Color.White,
+            disabledContainerColor = Color.White,
         ),
     )
 }

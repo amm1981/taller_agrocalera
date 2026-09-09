@@ -204,19 +204,25 @@ class AppHorometroController extends Controller
 
     private function operators(UsuarioAplicativo $usuario)
     {
-        $personalTipos = $usuario->tiposVehiculo()
+        $tiposRegistro = $usuario->tiposVehiculo()
             ->with('configuracionHorometro')
-            ->get()
+            ->get();
+        $personalTipos = $tiposRegistro
             ->flatMap(fn (TipoVehiculo $tipo) => $this->configuredPersonalTypes($tipo))
             ->filter()
             ->map(fn (string $tipo) => strtoupper($tipo))
             ->unique()
             ->values()
             ->all();
+        $personalUsuario = $usuario->personal;
+        $soloPropio = $personalUsuario !== null
+            && $personalTipos !== []
+            && in_array(strtoupper($personalUsuario->tipo), $personalTipos, true);
 
         return Personal::query()
-            ->when($usuario->personal_id, fn (Builder $query, int $personalId) => $query->whereKey($personalId))
-            ->when(! $usuario->personal_id && $personalTipos !== [], fn (Builder $query) => $query->whereIn(DB::raw('UPPER(tipo)'), $personalTipos))
+            ->when($soloPropio, fn (Builder $query) => $query->whereKey($personalUsuario->id))
+            ->when(! $soloPropio && $personalTipos !== [], fn (Builder $query) => $query->whereIn(DB::raw('UPPER(tipo)'), $personalTipos))
+            ->when(! $soloPropio && $personalTipos === [] && $usuario->personal_id, fn (Builder $query, int $personalId) => $query->whereKey($personalId))
             ->where('estado', 'ACTIVO')
             ->orderBy('nombres')
             ->get();
@@ -230,7 +236,21 @@ class AppHorometroController extends Controller
         $parametros = $tipo->configuracionHorometro?->parametros_adicionales ?? [];
         $tipos = $parametros['personal_tipos'] ?? [];
 
-        return is_array($tipos) ? $tipos : [];
+        if (is_array($tipos) && $tipos !== []) {
+            return $tipos;
+        }
+
+        $label = strtolower($tipo->nombre);
+
+        if (str_contains($label, 'maquinaria') || str_contains($label, 'pesada')) {
+            return ['MAQUINISTA'];
+        }
+
+        if (str_contains($label, 'tractor')) {
+            return ['TRACTORISTA', 'OPERARIO', 'CONDUCTOR'];
+        }
+
+        return [];
     }
 
     /**

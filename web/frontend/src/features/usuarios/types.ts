@@ -57,6 +57,20 @@ export type UsuarioAplicativoPayload = {
   tipo_vehiculo_ids: number[]
 }
 
+export type UsuarioAplicativoImportRow = {
+  dni_personal?: string
+  nombre?: string
+  usuario: string
+  contrasena?: string
+  tipos_registro: string
+  estado?: string
+}
+
+export type UsuarioAplicativoImportSummary = {
+  usuarios_creados: number
+  usuarios_actualizados: number
+}
+
 export type RoleFilters = {
   q?: string
   page?: number

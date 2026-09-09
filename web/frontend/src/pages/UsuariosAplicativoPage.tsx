@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { isAxiosError } from 'axios'
-import { KeyRound, Pencil, Save, Search, Smartphone, X } from 'lucide-react'
+import { Download, FileSpreadsheet, KeyRound, Pencil, Save, Search, Smartphone, Upload, X } from 'lucide-react'
 import type { Dispatch, SetStateAction } from 'react'
 import { useMemo, useState } from 'react'
 import { Button } from '../components/ui/button'
@@ -10,12 +10,25 @@ import { FilterField, inputClass } from '../features/taller/components/FilterFie
 import { StatusBadge } from '../features/taller/components/StatusBadge'
 import {
   createUsuarioAplicativo,
+  downloadUsuariosAplicativoImportTemplate,
   getUsuariosAplicativo,
+  importUsuariosAplicativo,
   updateUsuarioAplicativo,
 } from '../features/usuarios/usuariosService'
-import type { UsuarioAplicativo, UsuarioAplicativoPayload, UserFilters } from '../features/usuarios/types'
+import type { UsuarioAplicativo, UsuarioAplicativoImportRow, UsuarioAplicativoImportSummary, UsuarioAplicativoPayload, UserFilters } from '../features/usuarios/types'
 import { AppLayout } from '../layouts/AppLayout'
 import type { PaginatedResponse } from '../types/api'
+
+type ExcelCell = string | number | boolean | Date | null | undefined
+
+const appUserImportColumns: Array<keyof UsuarioAplicativoImportRow> = [
+  'dni_personal',
+  'nombre',
+  'usuario',
+  'contrasena',
+  'tipos_registro',
+  'estado',
+]
 
 function emptyPayload(): UsuarioAplicativoPayload {
   return {
@@ -46,12 +59,70 @@ function matchesFilters(user: UsuarioAplicativo, filters: UserFilters) {
   return (!filters.status || user.estado === filters.status) && (!search || text.includes(search))
 }
 
+function cellText(value: ExcelCell): string {
+  if (value === null || value === undefined) {
+    return ''
+  }
+
+  if (value instanceof Date) {
+    return value.toISOString().slice(0, 10)
+  }
+
+  return String(value).trim()
+}
+
+async function parseUsuariosAplicativoImportWorkbook(file: File): Promise<UsuarioAplicativoImportRow[]> {
+  const { readSheet } = await import('read-excel-file/browser')
+  const rawRows = await readSheet(file) as ExcelCell[][]
+
+  if (!rawRows.length) {
+    throw new Error('El archivo Excel no contiene filas.')
+  }
+
+  const headerRow = rawRows[0].map(cellText)
+  const missing = ['usuario', 'tipos_registro'].filter((column) => !headerRow.includes(column))
+
+  if (missing.length) {
+    throw new Error(`Faltan columnas: ${missing.join(', ')}`)
+  }
+
+  const rows: UsuarioAplicativoImportRow[] = []
+
+  rawRows.slice(1).forEach((rawRow) => {
+    const row = headerRow.reduce<Partial<UsuarioAplicativoImportRow>>((accumulator, header, index) => {
+      if (appUserImportColumns.includes(header as keyof UsuarioAplicativoImportRow)) {
+        const value = cellText(rawRow[index])
+
+        if (value !== '') {
+          accumulator[header as keyof UsuarioAplicativoImportRow] = value
+        }
+      }
+
+      return accumulator
+    }, {})
+
+    if (row.usuario) {
+      rows.push(row as UsuarioAplicativoImportRow)
+    }
+  })
+
+  if (!rows.length) {
+    throw new Error('El archivo Excel no contiene usuarios para importar.')
+  }
+
+  return rows
+}
+
 export function UsuariosAplicativoPage() {
   const queryClient = useQueryClient()
   const [filters, setFilters] = useState<UserFilters>({ page: 1, per_page: 50 })
   const [editing, setEditing] = useState<UsuarioAplicativo | null>(null)
   const [modalOpen, setModalOpen] = useState(false)
   const [form, setForm] = useState<UsuarioAplicativoPayload>(emptyPayload())
+  const [importRows, setImportRows] = useState<UsuarioAplicativoImportRow[]>([])
+  const [importFileName, setImportFileName] = useState<string | null>(null)
+  const [importError, setImportError] = useState<string | null>(null)
+  const [importSummary, setImportSummary] = useState<UsuarioAplicativoImportSummary | null>(null)
 
   const usuarios = useQuery({
     queryKey: ['usuarios-aplicativo', filters],
@@ -112,6 +183,71 @@ export function UsuariosAplicativoPage() {
     },
   })
 
+  const bulkImport = useMutation({
+    mutationFn: () => {
+      if (!importRows.length) {
+        throw new Error('Selecciona un archivo .xlsx antes de importar.')
+      }
+
+      return importUsuariosAplicativo(importRows)
+    },
+    onMutate: () => {
+      setImportError(null)
+      setImportSummary(null)
+    },
+    onSuccess: async (summary) => {
+      setImportSummary(summary)
+      setImportRows([])
+      setImportFileName(null)
+      await queryClient.invalidateQueries({ queryKey: ['usuarios-aplicativo'] })
+    },
+    onError: (error) => {
+      setImportError(error instanceof Error ? error.message : 'No se pudieron importar los usuarios aplicativo.')
+    },
+  })
+
+  const downloadTemplate = async () => {
+    const blob = await downloadUsuariosAplicativoImportTemplate()
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+
+    link.href = url
+    link.download = 'importador_usuarios_aplicativo.xlsx'
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    URL.revokeObjectURL(url)
+  }
+
+  const handleImportFile = async (file: File | null) => {
+    setImportError(null)
+    setImportSummary(null)
+
+    if (!file) {
+      setImportRows([])
+      setImportFileName(null)
+      return
+    }
+
+    if (!file.name.toLowerCase().endsWith('.xlsx')) {
+      setImportRows([])
+      setImportFileName(null)
+      setImportError('El importador debe ser un archivo .xlsx.')
+      return
+    }
+
+    try {
+      const rows = await parseUsuariosAplicativoImportWorkbook(file)
+
+      setImportRows(rows)
+      setImportFileName(file.name)
+    } catch (error) {
+      setImportRows([])
+      setImportFileName(file.name)
+      setImportError(error instanceof Error ? error.message : 'No se pudo leer el archivo Excel.')
+    }
+  }
+
   const openNew = () => {
     setEditing(null)
     save.reset()
@@ -140,6 +276,49 @@ export function UsuariosAplicativoPage() {
         <SummaryCard label="Activos" value={counts.activos} />
         <SummaryCard label="Con múltiples tipos" value={counts.multiples} />
       </div>
+
+      <section className="mb-5 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="grid h-10 w-10 place-items-center rounded-lg bg-blue-50 text-blue-700">
+              <FileSpreadsheet className="h-5 w-5" aria-hidden="true" />
+            </div>
+            <div>
+              <h2 className="text-base font-black text-slate-950">Importador masivo</h2>
+              <p className="text-sm font-medium text-slate-500">Carga usuarios del aplicativo y sus tipos de registro permitidos desde Excel.</p>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" variant="secondary" onClick={downloadTemplate}>
+              <Download className="h-4 w-4" aria-hidden="true" />
+              Descargar plantilla
+            </Button>
+            <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm transition hover:border-emerald-200 hover:text-emerald-800">
+              <Upload className="h-4 w-4" aria-hidden="true" />
+              {importFileName ?? 'Seleccionar .xlsx'}
+              <input
+                className="hidden"
+                type="file"
+                accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                onChange={(event) => void handleImportFile(event.target.files?.[0] ?? null)}
+              />
+            </label>
+            <Button type="button" disabled={!importRows.length || bulkImport.isPending} onClick={() => bulkImport.mutate()}>
+              <Upload className="h-4 w-4" aria-hidden="true" />
+              Importar
+            </Button>
+          </div>
+        </div>
+        <div className="mt-3 text-sm font-semibold text-slate-500">
+          {importRows.length > 0 ? `${importRows.length} filas listas para importar.` : 'En tipos_registro puedes usar varios valores separados por |.'}
+        </div>
+        {importError ? <div className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700">{importError}</div> : null}
+        {importSummary ? (
+          <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800">
+            Creados: {importSummary.usuarios_creados} · Actualizados: {importSummary.usuarios_actualizados}
+          </div>
+        ) : null}
+      </section>
 
       <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
         <div className="grid gap-3 border-b border-slate-100 p-5 md:grid-cols-[1fr_220px_auto]">

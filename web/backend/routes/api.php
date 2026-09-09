@@ -104,10 +104,12 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/usuarios/{usuario}', [UserController::class, 'show']);
         Route::get('/usuarios-aplicativo', [UsuarioAplicativoController::class, 'index']);
         Route::get('/usuarios-aplicativo/{usuarioAplicativo}', [UsuarioAplicativoController::class, 'show']);
+        Route::get('/importaciones/usuarios-aplicativo/plantilla', [UsuarioAplicativoController::class, 'importTemplate']);
     });
 
     Route::middleware('permission:usuarios.crear')->post('/usuarios', [UserController::class, 'store']);
     Route::middleware('permission:usuarios.crear')->post('/usuarios-aplicativo', [UsuarioAplicativoController::class, 'store']);
+    Route::middleware('permission:usuarios.crear')->post('/importaciones/usuarios-aplicativo', [UsuarioAplicativoController::class, 'bulkImport']);
     Route::middleware('permission:usuarios.editar')->put('/usuarios/{usuario}', [UserController::class, 'update']);
     Route::middleware('permission:usuarios.editar')->put('/usuarios-aplicativo/{usuarioAplicativo}', [UsuarioAplicativoController::class, 'update']);
 

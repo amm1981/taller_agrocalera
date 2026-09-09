@@ -7,6 +7,8 @@ import {
   updateHorometroConfiguracionTipo,
 } from '../features/horometros/horometrosService'
 import type { HorometroConfiguracion, HorometroConfiguracionPorTipo } from '../features/horometros/types'
+import { getTiposPersonalMaster } from '../features/maestros/maestrosService'
+import type { TipoPersonal } from '../features/maestros/types'
 import { FilterField, inputClass } from '../features/taller/components/FilterField'
 import { AppLayout } from '../layouts/AppLayout'
 
@@ -42,6 +44,10 @@ export function HorometrosConfiguracionPage() {
   const configuraciones = useQuery({
     queryKey: ['horometros-configuraciones'],
     queryFn: getHorometroConfiguraciones,
+  })
+  const tiposPersonal = useQuery({
+    queryKey: ['horometros-configuracion-tipos-personal'],
+    queryFn: getTiposPersonalMaster,
   })
   const [forms, setForms] = useState<Record<number, FormState>>({})
   const update = useMutation({
@@ -87,19 +93,16 @@ export function HorometrosConfiguracionPage() {
     }))
   }
 
-  const patchPersonalTypes = (tipoVehiculoId: number, value: string) => {
-    const personalTipos = value
-      .split(',')
-      .map((item) => item.trim().toUpperCase())
-      .filter(Boolean)
-
+  const patchPersonalType = (tipoVehiculoId: number, codigo: string, checked: boolean) => {
     setForms((current) => ({
       ...current,
       [tipoVehiculoId]: {
         ...current[tipoVehiculoId],
         parametros_adicionales: {
           ...(current[tipoVehiculoId]?.parametros_adicionales ?? {}),
-          personal_tipos: personalTipos,
+          personal_tipos: checked
+            ? Array.from(new Set([...(current[tipoVehiculoId]?.parametros_adicionales?.personal_tipos ?? []), codigo]))
+            : (current[tipoVehiculoId]?.parametros_adicionales?.personal_tipos ?? []).filter((item) => item !== codigo),
         },
       },
     }))
@@ -113,10 +116,11 @@ export function HorometrosConfiguracionPage() {
             key={item.tipo_vehiculo.id}
             item={item}
             form={forms[item.tipo_vehiculo.id]}
+            tiposPersonal={tiposPersonal.data ?? []}
             saving={update.isPending}
             onPatch={patch}
             onPatchRequired={patchRequiredField}
-            onPatchPersonalTypes={patchPersonalTypes}
+            onPatchPersonalType={patchPersonalType}
             onSave={() => {
               const payload = forms[item.tipo_vehiculo.id]
               if (payload) {
@@ -139,18 +143,20 @@ export function HorometrosConfiguracionPage() {
 function TipoRegistroConfigCard({
   item,
   form,
+  tiposPersonal,
   saving,
   onPatch,
   onPatchRequired,
-  onPatchPersonalTypes,
+  onPatchPersonalType,
   onSave,
 }: {
   item: HorometroConfiguracionPorTipo
   form?: FormState
+  tiposPersonal: TipoPersonal[]
   saving: boolean
   onPatch: <K extends keyof FormState>(tipoVehiculoId: number, key: K, value: FormState[K]) => void
   onPatchRequired: (tipoVehiculoId: number, key: keyof NonNullable<FormState['campos_requeridos']>, value: boolean) => void
-  onPatchPersonalTypes: (tipoVehiculoId: number, value: string) => void
+  onPatchPersonalType: (tipoVehiculoId: number, codigo: string, checked: boolean) => void
   onSave: () => void
 }) {
   if (!form) {
@@ -162,7 +168,7 @@ function TipoRegistroConfigCard({
     ...defaultRequiredFields,
     ...(form.campos_requeridos ?? {}),
   }
-  const personalTypesText = (form.parametros_adicionales?.personal_tipos ?? []).join(', ')
+  const personalTypes = form.parametros_adicionales?.personal_tipos ?? []
 
   return (
     <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
@@ -227,14 +233,30 @@ function TipoRegistroConfigCard({
 
         <div className="grid gap-3 rounded-xl border border-slate-200 p-4 xl:col-span-2">
           <h3 className="text-sm font-black uppercase text-slate-500">Personal permitido en el aplicativo</h3>
-          <FilterField label="Tipos de personal separados por coma">
-            <input
-              className={inputClass}
-              value={personalTypesText}
-              onChange={(event) => onPatchPersonalTypes(tipoId, event.target.value)}
-              placeholder="Ejemplo: TRACTORISTA, OPERARIO, CONDUCTOR"
-            />
-          </FilterField>
+          <div className="grid gap-2 md:grid-cols-3">
+            {tiposPersonal.map((tipo) => {
+              const codigo = tipo.codigo ?? tipo.nombre ?? ''
+
+              if (!codigo) {
+                return null
+              }
+
+              return (
+                <label key={tipo.id} className="flex cursor-pointer items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-bold text-slate-800">
+                  <input
+                    className="h-4 w-4 accent-emerald-700"
+                    type="checkbox"
+                    checked={personalTypes.includes(codigo)}
+                    onChange={(event) => onPatchPersonalType(tipoId, codigo, event.target.checked)}
+                  />
+                  <span>{codigo}</span>
+                </label>
+              )
+            })}
+          </div>
+          {!tiposPersonal.length ? (
+            <p className="text-xs font-semibold text-slate-500">No hay tipos de personal activos para seleccionar.</p>
+          ) : null}
           <p className="text-xs font-semibold text-slate-500">
             Si se deja vacío, el aplicativo mostrará el personal activo disponible para ese usuario.
           </p>

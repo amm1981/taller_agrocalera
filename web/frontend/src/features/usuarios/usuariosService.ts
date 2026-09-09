@@ -1,6 +1,18 @@
 import { api } from '../../api/http'
 import type { PaginatedResponse } from '../../types/api'
-import type { Permission, Role, RoleFilters, RolePayload, User, UserFilters, UserPayload, UsuarioAplicativo, UsuarioAplicativoPayload } from './types'
+import type {
+  Permission,
+  Role,
+  RoleFilters,
+  RolePayload,
+  User,
+  UserFilters,
+  UserPayload,
+  UsuarioAplicativo,
+  UsuarioAplicativoImportRow,
+  UsuarioAplicativoImportSummary,
+  UsuarioAplicativoPayload,
+} from './types'
 
 type DataResponse<T> = {
   data: T
@@ -38,6 +50,20 @@ export async function updateUsuarioAplicativo(id: number, payload: UsuarioAplica
   const { data } = await api.put<DataResponse<UsuarioAplicativo>>(`/usuarios-aplicativo/${id}`, payload)
 
   return data.data
+}
+
+export async function importUsuariosAplicativo(rows: UsuarioAplicativoImportRow[]) {
+  const { data } = await api.post<DataResponse<UsuarioAplicativoImportSummary>>('/importaciones/usuarios-aplicativo', { rows })
+
+  return data.data
+}
+
+export async function downloadUsuariosAplicativoImportTemplate() {
+  const { data } = await api.get<Blob>('/importaciones/usuarios-aplicativo/plantilla', {
+    responseType: 'blob',
+  })
+
+  return data
 }
 
 export async function createUsuario(payload: UserPayload) {

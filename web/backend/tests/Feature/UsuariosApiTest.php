@@ -2,7 +2,10 @@
 
 namespace Tests\Feature;
 
+use App\Models\Personal;
+use App\Models\TipoVehiculo;
 use App\Models\User;
+use App\Models\UsuarioAplicativo;
 use Database\Seeders\DatabaseSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Spatie\Permission\Models\Role;
@@ -128,6 +131,45 @@ class UsuariosApiTest extends TestCase
             ->withToken($token)
             ->deleteJson("/api/roles/{$adminRole->id}")
             ->assertUnprocessable();
+    }
+
+    public function test_admin_can_bulk_import_app_users(): void
+    {
+        $this->seed(DatabaseSeeder::class);
+        $token = $this->adminToken();
+        $tractor = TipoVehiculo::where('nombre', 'Tractor')->firstOrFail();
+        $machinery = TipoVehiculo::where('nombre', 'Maquinaria Pesada')->firstOrFail();
+        $personal = Personal::query()->create([
+            'dni' => '12345678',
+            'nombres' => 'Walter',
+            'apellidos' => 'Maquinista',
+            'tipo' => 'MAQUINISTA',
+            'estado' => 'ACTIVO',
+        ]);
+
+        $this
+            ->withToken($token)
+            ->postJson('/api/importaciones/usuarios-aplicativo', [
+                'rows' => [[
+                    'dni_personal' => "{$personal->dni} - {$personal->nombres} {$personal->apellidos}",
+                    'nombre' => 'Walter App',
+                    'usuario' => 'walter.app',
+                    'contrasena' => '12345678',
+                    'tipos_registro' => "{$tractor->nombre}|{$machinery->nombre}",
+                    'estado' => 'ACTIVO',
+                ]],
+            ])
+            ->assertOk()
+            ->assertJsonPath('data.usuarios_creados', 1)
+            ->assertJsonPath('data.usuarios_actualizados', 0);
+
+        $appUser = UsuarioAplicativo::where('usuario', 'walter.app')->firstOrFail();
+
+        $this->assertSame($personal->id, $appUser->personal_id);
+        $this->assertEqualsCanonicalizing(
+            [$tractor->id, $machinery->id],
+            $appUser->tiposVehiculo()->pluck('tipos_vehiculo.id')->all(),
+        );
     }
 
     private function adminToken(): string

@@ -717,6 +717,61 @@ class HorometrosApiTest extends TestCase
         $this->assertTrue(collect($sync->json('data.pendientes'))->every(fn (array $item) => $item['usuario_aplicativo_id'] === $appUser->id));
     }
 
+    public function test_heavy_machinery_app_sync_returns_configured_maquinistas(): void
+    {
+        $this->seed(DatabaseSeeder::class);
+
+        $machineryType = TipoVehiculo::where('nombre', 'Maquinaria Pesada')->firstOrFail();
+        $machineryType->configuracionHorometro()->updateOrCreate([], [
+            'parametros_adicionales' => ['personal_tipos' => ['MAQUINISTA']],
+        ]);
+        $responsable = Personal::query()->create([
+            'dni' => '11112222',
+            'nombres' => 'Responsable',
+            'apellidos' => 'Equipo',
+            'tipo' => 'RESPONSABLE',
+            'estado' => 'ACTIVO',
+        ]);
+        $maquinista = Personal::query()->create([
+            'dni' => '22223333',
+            'nombres' => 'Walter',
+            'apellidos' => 'Maquinista',
+            'tipo' => 'MAQUINISTA',
+            'estado' => 'ACTIVO',
+        ]);
+        Personal::query()->create([
+            'dni' => '33334444',
+            'nombres' => 'Luis',
+            'apellidos' => 'Tractorista',
+            'tipo' => 'TRACTORISTA',
+            'estado' => 'ACTIVO',
+        ]);
+        $appUser = UsuarioAplicativo::query()->create([
+            'personal_id' => $responsable->id,
+            'nombre' => 'Responsable Equipo',
+            'usuario' => 'responsable.mp',
+            'password' => Hash::make('12345678'),
+            'estado' => 'ACTIVO',
+        ]);
+        $appUser->tiposVehiculo()->sync([$machineryType->id]);
+
+        $login = $this->postJson('/api/app/horometros/login', [
+            'usuario' => 'responsable.mp',
+            'password' => '12345678',
+        ])->assertOk();
+
+        $operators = collect(
+            $this->withToken($login->json('token'))
+                ->getJson('/api/app/horometros/sync')
+                ->assertOk()
+                ->json('data.operadores')
+        );
+
+        $this->assertTrue($operators->contains('id', $maquinista->id));
+        $this->assertFalse($operators->contains('id', $responsable->id));
+        $this->assertTrue($operators->every(fn (array $item) => $item['tipo'] === 'MAQUINISTA'));
+    }
+
     private function adminToken(): string
     {
         return User::where('email', 'admin@agrocontrol.local')

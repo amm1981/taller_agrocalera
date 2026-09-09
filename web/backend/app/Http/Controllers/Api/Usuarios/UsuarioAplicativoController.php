@@ -11,6 +11,7 @@ use App\Support\SimpleXlsx;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Http\Response;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
@@ -82,6 +83,15 @@ class UsuarioAplicativoController extends Controller
         return response()->json([
             'data' => $usuarioAplicativo->refresh()->load(['personal', 'tiposVehiculo:id,nombre,estado']),
         ]);
+    }
+
+    public function destroy(UsuarioAplicativo $usuarioAplicativo): Response
+    {
+        $usuarioAplicativo->tokens()->delete();
+        $usuarioAplicativo->tiposVehiculo()->detach();
+        $usuarioAplicativo->delete();
+
+        return response()->noContent();
     }
 
     public function importTemplate(): BinaryFileResponse

@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { isAxiosError } from 'axios'
-import { Download, FileSpreadsheet, KeyRound, Pencil, Save, Search, Smartphone, Upload, X } from 'lucide-react'
+import { Download, FileSpreadsheet, KeyRound, Pencil, Save, Search, Smartphone, Trash2, Upload, X } from 'lucide-react'
 import type { Dispatch, SetStateAction } from 'react'
 import { useMemo, useState } from 'react'
 import { Button } from '../components/ui/button'
@@ -10,6 +10,7 @@ import { FilterField, inputClass } from '../features/taller/components/FilterFie
 import { StatusBadge } from '../features/taller/components/StatusBadge'
 import {
   createUsuarioAplicativo,
+  deleteUsuarioAplicativo,
   downloadUsuariosAplicativoImportTemplate,
   getUsuariosAplicativo,
   importUsuariosAplicativo,
@@ -117,6 +118,7 @@ export function UsuariosAplicativoPage() {
   const queryClient = useQueryClient()
   const [filters, setFilters] = useState<UserFilters>({ page: 1, per_page: 50 })
   const [editing, setEditing] = useState<UsuarioAplicativo | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<UsuarioAplicativo | null>(null)
   const [modalOpen, setModalOpen] = useState(false)
   const [form, setForm] = useState<UsuarioAplicativoPayload>(emptyPayload())
   const [importRows, setImportRows] = useState<UsuarioAplicativoImportRow[]>([])
@@ -203,6 +205,20 @@ export function UsuariosAplicativoPage() {
     },
     onError: (error) => {
       setImportError(error instanceof Error ? error.message : 'No se pudieron importar los usuarios aplicativo.')
+    },
+  })
+
+  const remove = useMutation({
+    mutationFn: () => {
+      if (!deleteTarget) {
+        throw new Error('Selecciona un usuario aplicativo para eliminar.')
+      }
+
+      return deleteUsuarioAplicativo(deleteTarget.id)
+    },
+    onSuccess: async () => {
+      setDeleteTarget(null)
+      await queryClient.invalidateQueries({ queryKey: ['usuarios-aplicativo'] })
     },
   })
 
@@ -376,15 +392,29 @@ export function UsuariosAplicativoPage() {
                   <td className="px-5 py-4"><StatusBadge value={user.estado} /></td>
                   <td className="px-5 py-4 text-slate-600">{user.ultimo_login_at?.replace('T', ' ').slice(0, 19) ?? '-'}</td>
                   <td className="px-5 py-4">
-                    <button
-                      type="button"
-                      className="p-1 text-slate-700 transition hover:text-emerald-800"
-                      onClick={() => openEdit(user)}
-                      title="Editar acceso"
-                      aria-label={`Editar acceso ${user.usuario}`}
-                    >
-                      <Pencil className="h-5 w-5" aria-hidden="true" />
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        className="p-1 text-slate-700 transition hover:text-emerald-800"
+                        onClick={() => openEdit(user)}
+                        title="Editar acceso"
+                        aria-label={`Editar acceso ${user.usuario}`}
+                      >
+                        <Pencil className="h-5 w-5" aria-hidden="true" />
+                      </button>
+                      <button
+                        type="button"
+                        className="p-1 text-rose-600 transition hover:text-rose-800"
+                        onClick={() => {
+                          remove.reset()
+                          setDeleteTarget(user)
+                        }}
+                        title="Eliminar acceso"
+                        aria-label={`Eliminar acceso ${user.usuario}`}
+                      >
+                        <Trash2 className="h-5 w-5" aria-hidden="true" />
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -398,6 +428,15 @@ export function UsuariosAplicativoPage() {
             </tbody>
           </table>
         </div>
+
+        <AppUsersPaginationBar
+          currentPage={usuarios.data?.meta.current_page ?? 1}
+          lastPage={usuarios.data?.meta.last_page ?? 1}
+          perPage={usuarios.data?.meta.per_page ?? 50}
+          total={usuarios.data?.meta.total ?? 0}
+          showing={usuarios.data?.data.length ?? 0}
+          onPageChange={(page) => setFilters((current) => ({ ...current, page }))}
+        />
       </section>
 
       {modalOpen ? (
@@ -416,7 +455,58 @@ export function UsuariosAplicativoPage() {
           onSubmit={() => save.mutate()}
         />
       ) : null}
+
+      {deleteTarget ? (
+        <DeleteUsuarioAplicativoModal
+          user={deleteTarget}
+          loading={remove.isPending}
+          error={remove.error ? apiErrorMessage(remove.error, 'No se pudo eliminar el usuario del aplicativo.') : null}
+          onCancel={() => {
+            remove.reset()
+            setDeleteTarget(null)
+          }}
+          onConfirm={() => remove.mutate()}
+        />
+      ) : null}
     </AppLayout>
+  )
+}
+
+function AppUsersPaginationBar({
+  currentPage,
+  lastPage,
+  perPage,
+  total,
+  showing,
+  onPageChange,
+}: {
+  currentPage: number
+  lastPage: number
+  perPage: number
+  total: number
+  showing: number
+  onPageChange: (page: number) => void
+}) {
+  const start = total === 0 ? 0 : ((currentPage - 1) * perPage) + 1
+  const end = Math.min((currentPage - 1) * perPage + showing, total)
+
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 px-5 py-3 text-sm font-medium text-slate-500">
+      <span>
+        Mostrando {start}-{end} de {total} usuarios aplicativo
+      </span>
+      <div className="flex items-center gap-2">
+        <Button variant="secondary" disabled={currentPage <= 1} onClick={() => onPageChange(currentPage - 1)}>
+          Anterior
+        </Button>
+        <span className="rounded-md bg-emerald-700 px-3 py-2 font-black text-white">
+          {currentPage} / {lastPage}
+        </span>
+        <Button variant="secondary" disabled={currentPage >= lastPage} onClick={() => onPageChange(currentPage + 1)}>
+          Siguiente
+        </Button>
+      </div>
+    </div>
   )
 }
 
@@ -556,6 +646,47 @@ function UsuarioAplicativoModal({
             </Button>
           </div>
         </form>
+      </section>
+    </div>
+  )
+}
+
+function DeleteUsuarioAplicativoModal({
+  user,
+  loading,
+  error,
+  onCancel,
+  onConfirm,
+}: {
+  user: UsuarioAplicativo
+  loading: boolean
+  error: string | null
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/45 p-4 backdrop-blur-sm">
+      <section className="w-full max-w-md rounded-xl bg-white shadow-2xl">
+        <div className="border-b border-slate-100 px-5 py-4">
+          <h2 className="text-lg font-black text-slate-950">Eliminar usuario aplicativo</h2>
+          <p className="mt-1 text-sm font-medium text-slate-500">
+            Se eliminará el acceso móvil de {user.nombre}. Esta acción no elimina el personal vinculado.
+          </p>
+        </div>
+
+        {error ? (
+          <div className="mx-5 mt-4 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700">
+            {error}
+          </div>
+        ) : null}
+
+        <div className="flex justify-end gap-3 px-5 py-4">
+          <Button type="button" variant="secondary" onClick={onCancel} disabled={loading}>Cancelar</Button>
+          <Button type="button" className="bg-rose-600 hover:bg-rose-700" onClick={onConfirm} disabled={loading}>
+            <Trash2 className="h-4 w-4" aria-hidden="true" />
+            Eliminar
+          </Button>
+        </div>
       </section>
     </div>
   )

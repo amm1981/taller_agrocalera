@@ -112,6 +112,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::middleware('permission:usuarios.crear')->post('/importaciones/usuarios-aplicativo', [UsuarioAplicativoController::class, 'bulkImport']);
     Route::middleware('permission:usuarios.editar')->put('/usuarios/{usuario}', [UserController::class, 'update']);
     Route::middleware('permission:usuarios.editar')->put('/usuarios-aplicativo/{usuarioAplicativo}', [UsuarioAplicativoController::class, 'update']);
+    Route::middleware('permission:usuarios.editar')->delete('/usuarios-aplicativo/{usuarioAplicativo}', [UsuarioAplicativoController::class, 'destroy']);
 
     Route::middleware('permission:usuarios.permisos')->group(function () {
         Route::get('/roles', [RolePermissionController::class, 'roles']);

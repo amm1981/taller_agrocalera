@@ -52,6 +52,10 @@ export async function updateUsuarioAplicativo(id: number, payload: UsuarioAplica
   return data.data
 }
 
+export async function deleteUsuarioAplicativo(id: number) {
+  await api.delete(`/usuarios-aplicativo/${id}`)
+}
+
 export async function importUsuariosAplicativo(rows: UsuarioAplicativoImportRow[]) {
   const { data } = await api.post<DataResponse<UsuarioAplicativoImportSummary>>('/importaciones/usuarios-aplicativo', { rows })
 

@@ -1337,19 +1337,24 @@ fun HorometroApp() {
             progress = updateProgress,
             error = updateError,
             onDownload = {
-                updateDownloading = true
-                updateProgress = 0
-                updateError = null
-                scope.launch {
-                    runCatching {
-                        val apk = downloadUpdateApk(context, visibleUpdate) { progress ->
-                            updateProgress = progress
+                if (!context.packageManager.canRequestPackageInstalls()) {
+                    updateError = "Autoriza la instalacion desde esta app y vuelve a pulsar Actualizar."
+                    openInstallPermissionSettings(context)
+                } else {
+                    updateDownloading = true
+                    updateProgress = 0
+                    updateError = null
+                    scope.launch {
+                        runCatching {
+                            val apk = downloadUpdateApk(context, visibleUpdate) { progress ->
+                                updateProgress = progress
+                            }
+                            installDownloadedApk(context, apk)
+                        }.onFailure {
+                            updateError = it.message ?: "No se pudo descargar la actualizacion."
                         }
-                        installDownloadedApk(context, apk)
-                    }.onFailure {
-                        updateError = it.message ?: "No se pudo descargar la actualizacion."
+                        updateDownloading = false
                     }
-                    updateDownloading = false
                 }
             },
             onDismiss = {
@@ -1490,11 +1495,7 @@ private suspend fun downloadUpdateApk(
 
 private fun installDownloadedApk(context: Context, apk: File) {
     if (!context.packageManager.canRequestPackageInstalls()) {
-        val settingsIntent = Intent(
-            Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-            Uri.parse("package:${context.packageName}"),
-        ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        context.startActivity(settingsIntent)
+        openInstallPermissionSettings(context)
         throw IllegalStateException("Autoriza la instalacion desde esta app y vuelve a pulsar Actualizar.")
     }
 
@@ -1505,6 +1506,14 @@ private fun installDownloadedApk(context: Context, apk: File) {
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     }
     context.startActivity(intent)
+}
+
+private fun openInstallPermissionSettings(context: Context) {
+    val settingsIntent = Intent(
+        Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+        Uri.parse("package:${context.packageName}"),
+    ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    context.startActivity(settingsIntent)
 }
 
 @Composable

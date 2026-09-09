@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { isAxiosError } from 'axios'
-import { Download, FileUp, RefreshCw, ShieldAlert, Smartphone, UploadCloud } from 'lucide-react'
-import { useState } from 'react'
+import { Download, FileUp, LoaderCircle, RefreshCw, ShieldAlert, Smartphone, UploadCloud } from 'lucide-react'
+import { useRef, useState } from 'react'
 import { Button } from '../components/ui/button'
 import {
   createAppVersion,
@@ -11,6 +11,7 @@ import {
 } from '../features/configuracion/appVersionService'
 import { FilterField, inputClass } from '../features/taller/components/FilterField'
 import { AppLayout } from '../layouts/AppLayout'
+import { notifyProcess } from '../utils/processNotifications'
 
 function emptyForm(): AppVersionPayload {
   return {
@@ -62,18 +63,56 @@ export function AppVersionPage() {
   const [page, setPage] = useState(1)
   const [form, setForm] = useState<AppVersionPayload>(() => emptyForm())
   const [localError, setLocalError] = useState<string | null>(null)
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null)
+  const uploadProcessId = useRef<string | null>(null)
 
   const current = useQuery({ queryKey: ['app-version-current'], queryFn: getCurrentAppVersion })
   const versions = useQuery({ queryKey: ['app-versiones', page], queryFn: () => getAppVersions(page) })
   const createMutation = useMutation({
-    mutationFn: createAppVersion,
-    onSuccess: async () => {
+    mutationFn: (payload: AppVersionPayload) => createAppVersion(payload, (event) => {
+      const total = event.total ?? payload.apk?.size ?? 0
+
+      if (!total) {
+        return
+      }
+
+      const progress = Math.min(99, Math.round((event.loaded * 100) / total))
+      setUploadProgress(progress)
+      notifyProcess({
+        id: uploadProcessId.current ?? 'apk-upload',
+        title: 'Publicacion APK',
+        message: `Subiendo ${payload.apk?.name ?? 'archivo APK'}`,
+        status: 'running',
+        progress,
+      })
+    }),
+    onSuccess: async (version) => {
+      notifyProcess({
+        id: uploadProcessId.current ?? 'apk-upload',
+        title: 'Publicacion APK',
+        message: `Version ${version.version_name} publicada correctamente.`,
+        status: 'success',
+        progress: 100,
+      })
+      setUploadProgress(null)
+      uploadProcessId.current = null
       setForm(emptyForm())
       setLocalError(null)
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['app-version-current'] }),
         queryClient.invalidateQueries({ queryKey: ['app-versiones'] }),
       ])
+    },
+    onError: (error) => {
+      notifyProcess({
+        id: uploadProcessId.current ?? 'apk-upload',
+        title: 'Publicacion APK',
+        message: apiErrorMessage(error, 'No se pudo publicar la version.'),
+        status: 'error',
+        progress: uploadProgress ?? undefined,
+      })
+      setUploadProgress(null)
+      uploadProcessId.current = null
     },
   })
 
@@ -158,6 +197,15 @@ export function AppVersionPage() {
               }
 
               setLocalError(null)
+              setUploadProgress(0)
+              uploadProcessId.current = `apk-upload-${Date.now()}`
+              notifyProcess({
+                id: uploadProcessId.current,
+                title: 'Publicacion APK',
+                message: `Preparando carga de ${form.apk.name}`,
+                status: 'running',
+                progress: 0,
+              })
               createMutation.mutate(form)
             }}
           >
@@ -192,6 +240,23 @@ export function AppVersionPage() {
                 onChange={(event) => setForm((current) => ({ ...current, apk: event.target.files?.[0] ?? null }))}
               />
             </label>
+            {createMutation.isPending ? (
+              <div className="rounded-xl border border-emerald-100 bg-emerald-50 p-3">
+                <div className="flex items-center justify-between gap-3 text-sm font-black text-emerald-900">
+                  <span className="inline-flex items-center gap-2">
+                    <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" />
+                    Publicando APK
+                  </span>
+                  <span>{uploadProgress ?? 0}%</span>
+                </div>
+                <div className="mt-2 h-2 overflow-hidden rounded-full bg-white">
+                  <div className="h-full rounded-full bg-[#0e5631] transition-all" style={{ width: `${uploadProgress ?? 0}%` }} />
+                </div>
+              </div>
+            ) : null}
+            <div className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-800">
+              El version code publicado debe coincidir con el versionCode interno del APK. Si no coincide, la app seguira detectando actualizacion despues de instalar.
+            </div>
             {error ? (
               <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">
                 <ShieldAlert className="h-4 w-4" aria-hidden="true" />

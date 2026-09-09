@@ -66,8 +66,14 @@ class AppVersionController extends Controller
             Str::uuid(),
         );
 
-        $stored = Storage::disk(config('filesystems.evidence_disk', 'public'))
-            ->put($path, file_get_contents($file->getRealPath()));
+        $stream = fopen($file->getRealPath(), 'r');
+        $stored = $stream
+            ? Storage::disk(config('filesystems.evidence_disk', 'public'))->put($path, $stream)
+            : false;
+
+        if (is_resource($stream)) {
+            fclose($stream);
+        }
 
         if (! $stored) {
             throw ValidationException::withMessages([

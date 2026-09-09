@@ -7,10 +7,13 @@ import {
   ChartNoAxesCombined,
   CarFront,
   ChevronDown,
+  CheckCircle2,
+  CircleAlert,
   Factory,
   Gauge,
   Home,
   Layers3,
+  LoaderCircle,
   LogOut,
   MapPinned,
   Menu,
@@ -27,6 +30,12 @@ import {
 } from 'lucide-react'
 import { useAuth } from '../features/auth/AuthContext'
 import { cn } from '../utils/cn'
+import {
+  PROCESS_NOTIFICATION_EVENT,
+  PROCESS_NOTIFICATION_STORAGE_KEY,
+  type ProcessNotification,
+  type ProcessNotificationInput,
+} from '../utils/processNotifications'
 
 const masterNavigation = [
   { label: 'Vehículos', icon: CarFront, to: '/maestros?tab=vehiculos', tab: 'vehiculos' },
@@ -83,6 +92,16 @@ export function AppLayout({
   const location = useLocation()
   const [sidebarExpanded, setSidebarExpanded] = useState(true)
   const [openMenu, setOpenMenu] = useState<string | null>(null)
+  const [notificationsOpen, setNotificationsOpen] = useState(false)
+  const [processNotifications, setProcessNotifications] = useState<ProcessNotification[]>(() => {
+    try {
+      const saved = localStorage.getItem(PROCESS_NOTIFICATION_STORAGE_KEY)
+
+      return saved ? JSON.parse(saved) as ProcessNotification[] : []
+    } catch {
+      return []
+    }
+  })
   const initials = (session?.user.name ?? 'Juan Andrade')
     .split(' ')
     .map((part) => part.charAt(0).toUpperCase())
@@ -112,6 +131,37 @@ export function AppLayout({
 
     setOpenMenu(activeParent)
   }, [location.pathname, sidebarExpanded])
+
+  useEffect(() => {
+    const handleProcessNotification = (event: Event) => {
+      const detail = (event as CustomEvent<ProcessNotificationInput>).detail
+      const now = new Date().toISOString()
+
+      setProcessNotifications((current) => {
+        const existing = current.find((item) => item.id === detail.id)
+        const nextItem: ProcessNotification = {
+          id: detail.id,
+          title: detail.title,
+          message: detail.message,
+          status: detail.status,
+          progress: detail.progress,
+          createdAt: existing?.createdAt ?? now,
+          updatedAt: now,
+        }
+        const next = [nextItem, ...current.filter((item) => item.id !== detail.id)].slice(0, 20)
+        localStorage.setItem(PROCESS_NOTIFICATION_STORAGE_KEY, JSON.stringify(next))
+
+        return next
+      })
+    }
+
+    window.addEventListener(PROCESS_NOTIFICATION_EVENT, handleProcessNotification)
+
+    return () => window.removeEventListener(PROCESS_NOTIFICATION_EVENT, handleProcessNotification)
+  }, [])
+
+  const activeProcessCount = processNotifications.filter((item) => item.status === 'running').length
+  const notificationCount = activeProcessCount || processNotifications.length
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
@@ -273,14 +323,73 @@ export function AppLayout({
             <Search className="h-4 w-4 text-slate-400" aria-hidden="true" />
             <input className="min-w-0 flex-1 border-0 bg-transparent text-slate-700 outline-none placeholder:text-slate-400" placeholder="Buscar..." />
           </label>
-          <button
-            type="button"
-            className="relative hidden h-10 w-10 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 shadow-sm md:flex"
-            aria-label="Notificaciones"
-          >
-            <Bell className="h-4 w-4" aria-hidden="true" />
-            <span className="absolute -right-0.5 -top-0.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-emerald-700 px-1 text-[11px] font-black text-white">3</span>
-          </button>
+          <div className="relative hidden md:block">
+            <button
+              type="button"
+              className="relative flex h-10 w-10 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:bg-slate-50"
+              aria-label="Notificaciones"
+              onClick={() => setNotificationsOpen((current) => !current)}
+            >
+              <Bell className="h-4 w-4" aria-hidden="true" />
+              {notificationCount ? (
+                <span className="absolute -right-0.5 -top-0.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-emerald-700 px-1 text-[11px] font-black text-white">
+                  {notificationCount > 9 ? '9+' : notificationCount}
+                </span>
+              ) : null}
+            </button>
+            {notificationsOpen ? (
+              <div className="absolute right-0 top-12 z-30 w-96 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl">
+                <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
+                  <div>
+                    <div className="text-sm font-black text-slate-950">Procesos</div>
+                    <div className="text-xs font-semibold text-slate-500">Cargas y tareas recientes</div>
+                  </div>
+                  {processNotifications.length ? (
+                    <button
+                      type="button"
+                      className="text-xs font-black text-emerald-700 hover:text-emerald-900"
+                      onClick={() => {
+                        setProcessNotifications([])
+                        localStorage.removeItem(PROCESS_NOTIFICATION_STORAGE_KEY)
+                      }}
+                    >
+                      Limpiar
+                    </button>
+                  ) : null}
+                </div>
+                <div className="max-h-96 overflow-y-auto p-2">
+                  {processNotifications.length ? processNotifications.map((item) => (
+                    <div key={item.id} className="rounded-lg px-3 py-2 hover:bg-slate-50">
+                      <div className="flex items-start gap-3">
+                        <div className={cn(
+                          'mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-full',
+                          item.status === 'running' ? 'bg-blue-50 text-blue-700' : item.status === 'success' ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700',
+                        )}>
+                          {item.status === 'running' ? <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" /> : item.status === 'success' ? <CheckCircle2 className="h-4 w-4" aria-hidden="true" /> : <CircleAlert className="h-4 w-4" aria-hidden="true" />}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-sm font-black text-slate-900">{item.title}</div>
+                          <div className="mt-0.5 text-xs font-medium text-slate-500">{item.message ?? '-'}</div>
+                          {item.status === 'running' && typeof item.progress === 'number' ? (
+                            <div className="mt-2">
+                              <div className="h-1.5 overflow-hidden rounded-full bg-slate-100">
+                                <div className="h-full rounded-full bg-emerald-700 transition-all" style={{ width: `${Math.max(0, Math.min(100, item.progress))}%` }} />
+                              </div>
+                              <div className="mt-1 text-right text-[11px] font-black text-slate-500">{Math.round(item.progress)}%</div>
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
+                    </div>
+                  )) : (
+                    <div className="px-4 py-8 text-center text-sm font-semibold text-slate-500">
+                      No hay procesos recientes.
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) : null}
+          </div>
         </header>
 
         <nav className="flex gap-2 overflow-x-auto border-b border-slate-100 bg-white px-4 py-2 lg:hidden">

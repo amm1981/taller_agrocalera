@@ -1,4 +1,5 @@
 import { api } from '../../api/http'
+import type { AxiosProgressEvent } from 'axios'
 import type { PaginatedResponse } from '../../types/api'
 
 export type AppVersion = {
@@ -47,7 +48,7 @@ export async function getAppVersions(page = 1) {
   return data
 }
 
-export async function createAppVersion(payload: AppVersionPayload) {
+export async function createAppVersion(payload: AppVersionPayload, onUploadProgress?: (event: AxiosProgressEvent) => void) {
   const formData = new FormData()
   formData.append('version_code', payload.version_code)
   formData.append('version_name', payload.version_name)
@@ -60,6 +61,7 @@ export async function createAppVersion(payload: AppVersionPayload) {
 
   const { data } = await api.post<DataResponse<AppVersion>>('/app-versiones', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
+    onUploadProgress,
   })
 
   return data.data

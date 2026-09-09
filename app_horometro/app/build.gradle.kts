@@ -12,8 +12,18 @@ val localProperties = Properties().also { properties ->
     }
 }
 
+fun configValue(name: String, fallback: String): String {
+    return localProperties.getProperty(name)?.takeIf { it.isNotBlank() }
+        ?: System.getenv(name)?.takeIf { it.isNotBlank() }
+        ?: fallback
+}
+
+fun intConfig(name: String, fallback: Int): Int {
+    return configValue(name, fallback.toString()).toIntOrNull() ?: fallback
+}
+
 fun quotedBuildConfig(name: String, fallback: String): String {
-    val value = localProperties.getProperty(name)?.takeIf { it.isNotBlank() } ?: fallback
+    val value = configValue(name, fallback)
 
     return "\"${value.replace("\\", "\\\\").replace("\"", "\\\"")}\""
 }
@@ -29,8 +39,8 @@ android {
         applicationId = "com.amm1981.horometro"
         minSdk = 34
         targetSdk = 37
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = intConfig("APP_VERSION_CODE", 2)
+        versionName = configValue("APP_VERSION_NAME", "1.0.1")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

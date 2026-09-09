@@ -1,6 +1,7 @@
 import { Route, Routes } from 'react-router-dom'
 import { GuestRoute } from '../components/common/GuestRoute'
 import { ProtectedRoute } from '../components/common/ProtectedRoute'
+import { AppVersionPage } from '../pages/AppVersionPage'
 import { DashboardPage } from '../pages/DashboardPage'
 import { HorometrosDashboardPage } from '../pages/HorometrosDashboardPage'
 import { HorometrosConfiguracionPage } from '../pages/HorometrosConfiguracionPage'
@@ -50,6 +51,7 @@ export function AppRoutes() {
         <Route path="/usuarios" element={<UsuariosPage />} />
         <Route path="/usuarios/aplicativo" element={<UsuariosAplicativoPage />} />
         <Route path="/usuarios/roles" element={<RolesPage />} />
+        <Route path="/configuracion/version-apk" element={<AppVersionPage />} />
         <Route
           path="/configuracion"
           element={

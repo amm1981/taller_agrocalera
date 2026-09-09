@@ -54,13 +54,18 @@ const usuariosNavigation = [
   { label: 'Roles', icon: ShieldCheck, to: '/usuarios/roles', key: 'roles' },
 ]
 
+const configuracionNavigation = [
+  { label: 'General', icon: Settings, to: '/configuracion', key: 'general' },
+  { label: 'Versión APK', icon: Smartphone, to: '/configuracion/version-apk', key: 'version-apk' },
+]
+
 const navigation = [
   { label: 'Inicio', icon: Home, to: '/' },
   { label: 'Taller', icon: Wrench, to: '/taller' },
   { label: 'Horómetros', icon: Gauge, to: '/horometros', children: horometrosNavigation },
   { label: 'Maestros', icon: ShieldCheck, to: '/maestros?tab=vehiculos', children: masterNavigation },
   { label: 'Usuarios', icon: Users, to: '/usuarios', children: usuariosNavigation },
-  { label: 'Configuración', icon: Settings, to: '/configuracion' },
+  { label: 'Configuración', icon: Settings, to: '/configuracion', children: configuracionNavigation },
 ]
 
 type AppLayoutProps = {
@@ -100,7 +105,9 @@ export function AppLayout({
         ? location.pathname.startsWith('/horometros')
         : itemPath === '/maestros'
           ? location.pathname === '/maestros'
-          : location.pathname.startsWith(itemPath)
+          : itemPath === '/configuracion'
+            ? location.pathname.startsWith('/configuracion')
+            : location.pathname.startsWith(itemPath)
     })?.label ?? null
 
     setOpenMenu(activeParent)
@@ -144,11 +151,14 @@ export function AppLayout({
           {navigation.map((item) => {
             const isMaestros = item.label === 'Maestros'
             const isHorometros = item.label === 'Horómetros'
+            const isConfiguracion = item.label === 'Configuración'
             const itemPath = item.to.split('?')[0]
             const isActive = isMaestros
               ? location.pathname === '/maestros'
               : isHorometros
                 ? location.pathname.startsWith('/horometros')
+                : isConfiguracion
+                  ? location.pathname.startsWith('/configuracion')
               : itemPath === '/' ? location.pathname === '/' : location.pathname.startsWith(itemPath)
             const isOpen = openMenu === item.label
 

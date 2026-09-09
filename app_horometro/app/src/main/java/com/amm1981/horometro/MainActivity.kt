@@ -3,6 +3,7 @@ package com.amm1981.horometro
 import android.Manifest
 import android.app.Activity
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
 import android.net.ConnectivityManager
@@ -59,6 +60,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -111,6 +113,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Construction
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Agriculture
 import androidx.compose.material.icons.filled.Info
@@ -243,6 +246,14 @@ data class AppSession(
     val role: String,
     val personalId: Int? = null,
     val allowedTypes: List<RegistrationType> = emptyList(),
+)
+
+data class AppUpdate(
+    val versionCode: Int,
+    val versionName: String,
+    val message: String,
+    val required: Boolean,
+    val downloadUrl: String,
 )
 
 data class HourmeterCaptureDraft(
@@ -431,6 +442,28 @@ class AgroControlApi(private val baseUrl: String) {
         onProgress(100)
 
         return FieldData(newVehicles, newOperators, newPending, newFundos, newSectores, newLotes, newConfig, newTypes)
+    }
+
+    suspend fun appUpdate(): AppUpdate? = withContext(Dispatchers.IO) {
+        val data = request("GET", "/app/version").optJSONObject("data") ?: return@withContext null
+        val versionCode = data.optInt("version_code", BuildConfig.VERSION_CODE)
+
+        if (versionCode <= BuildConfig.VERSION_CODE) {
+            return@withContext null
+        }
+
+        val downloadUrl = data.optString("download_url")
+        if (downloadUrl.isBlank()) {
+            return@withContext null
+        }
+
+        AppUpdate(
+            versionCode = versionCode,
+            versionName = data.optString("version_name", "Nueva version"),
+            message = data.optString("message", "Hay una nueva version disponible."),
+            required = data.optBoolean("required", false),
+            downloadUrl = downloadUrl,
+        )
     }
 
     suspend fun submitLocalRecord(token: String, local: LocalHourmeterRecord, onStartSaved: (Int) -> Unit = {}): LocalHourmeterRecord {
@@ -1157,9 +1190,23 @@ fun HorometroApp() {
     var syncLoading by remember { mutableStateOf(false) }
     var syncProgress by remember { mutableStateOf(0) }
     var syncError by remember { mutableStateOf<String?>(null) }
+    var appUpdate by remember { mutableStateOf<AppUpdate?>(null) }
+    var dismissedUpdateCode by remember { mutableStateOf<Int?>(null) }
     val api = remember { AgroControlApi(DEFAULT_API_URL.trimEnd('/')) }
 
+    fun checkForUpdates() {
+        scope.launch {
+            runCatching { api.appUpdate() }.onSuccess { update ->
+                if (update != null) {
+                    appUpdate = update
+                }
+            }
+        }
+    }
+
     LaunchedEffect(Unit) {
+        checkForUpdates()
+
         val stored = loadAppSession(context)
         if (stored != null) {
             session = stored
@@ -1199,6 +1246,7 @@ fun HorometroApp() {
             syncLoading = false
             if (syncError == null) {
                 syncProgress = 100
+                checkForUpdates()
             }
         }
     }
@@ -1274,6 +1322,68 @@ fun HorometroApp() {
                 },
             )
         }
+    }
+
+    val visibleUpdate = appUpdate?.takeIf { it.required || dismissedUpdateCode != it.versionCode }
+    if (visibleUpdate != null) {
+        AppUpdateDialog(
+            update = visibleUpdate,
+            onDownload = { openDownload(context, visibleUpdate.downloadUrl) },
+            onDismiss = {
+                if (!visibleUpdate.required) {
+                    dismissedUpdateCode = visibleUpdate.versionCode
+                }
+            },
+        )
+    }
+}
+
+@Composable
+fun AppUpdateDialog(
+    update: AppUpdate,
+    onDownload: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = {
+            if (!update.required) {
+                onDismiss()
+            }
+        },
+        icon = {
+            Icon(Icons.Filled.Download, contentDescription = null, tint = AppGreen)
+        },
+        title = {
+            Text("Nueva version disponible", color = AppText, fontWeight = FontWeight.Black)
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Version ${update.versionName} (${update.versionCode})", color = AppGreenDark, fontWeight = FontWeight.Black)
+                Text(update.message, color = AppMuted, style = MaterialTheme.typography.bodyMedium)
+                if (update.required) {
+                    Text("Esta actualizacion es obligatoria para continuar.", color = Color(0xFFBE123C), fontWeight = FontWeight.Bold)
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = onDownload, colors = ButtonDefaults.buttonColors(containerColor = AppGreen, contentColor = Color.White)) {
+                Icon(Icons.Filled.Download, contentDescription = null)
+                Text("Actualizar")
+            }
+        },
+        dismissButton = {
+            if (!update.required) {
+                TextButton(onClick = onDismiss) {
+                    Text("Despues", color = AppGreenDark, fontWeight = FontWeight.Bold)
+                }
+            }
+        },
+    )
+}
+
+private fun openDownload(context: Context, url: String) {
+    runCatching {
+        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
     }
 }
 

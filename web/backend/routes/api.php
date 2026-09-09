@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Api\Auth\AuthController;
+use App\Http\Controllers\Api\AppVersionController;
 use App\Http\Controllers\Api\Horometros\AppHorometroController;
 use App\Http\Controllers\Api\Horometros\ConfiguracionController as HorometrosConfiguracionController;
 use App\Http\Controllers\Api\Horometros\DashboardController as HorometrosDashboardController;
@@ -28,6 +29,7 @@ Route::get('/health', fn () => [
 ]);
 
 Route::get('/integraciones/horometros/exportable-sap', SapReportController::class);
+Route::get('/app/version', [AppVersionController::class, 'current']);
 
 Route::prefix('app/horometros')->group(function () {
     Route::post('/login', [AppHorometroController::class, 'login']);
@@ -121,6 +123,8 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::delete('/roles/{role}', [RolePermissionController::class, 'destroyRole']);
         Route::get('/permisos', [RolePermissionController::class, 'permissions']);
         Route::get('/permissions', [RolePermissionController::class, 'permissions']);
+        Route::get('/app-versiones', [AppVersionController::class, 'index']);
+        Route::post('/app-versiones', [AppVersionController::class, 'store']);
     });
 
     Route::prefix('taller')->group(function () {
